@@ -1,6 +1,6 @@
 # emperor-vikunja — AI agent notes
 
-**Crate**: `emperor-vikunja` · **Version**: 0.1.0 · **Licence**: MIT OR Apache-2.0 · **Rust**: 1.88 (edition 2024; `rust-version` matches the highest MSRV in the dependency graph, rmcp 3.8)
+**Crate**: `emperor-vikunja` · **Version**: 0.1.1 · **Licence**: MIT OR Apache-2.0 · **Rust**: 1.88 (edition 2024; `rust-version` matches the highest MSRV in the dependency graph, rmcp 3.8)
 
 ## Scope
 

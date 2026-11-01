@@ -1,6 +1,6 @@
 [package]
 name = "emperor-vikunja"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "MCP server for Vikunja: list, read, create and update tasks, comment, list projects; built on emperor-mcp"

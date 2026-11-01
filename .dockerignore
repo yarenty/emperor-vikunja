@@ -1,0 +1,5 @@
+# Only Cargo.toml, Cargo.lock and src/ go into the image build.
+*
+!Cargo.toml
+!Cargo.lock
+!src/
