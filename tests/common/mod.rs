@@ -60,6 +60,8 @@ pub struct Data {
 pub struct Fake {
     pub base: String,
     pub token: String,
+    /// A token Vikunja knows but that may not do anything: answered with 403.
+    pub forbidden_token: String,
     pub data: Arc<Mutex<Data>>,
 }
 
@@ -74,6 +76,14 @@ pub fn fresh_token() -> String {
 
 fn user() -> Value {
     json!({ "id": 1, "name": "Alice", "username": "alice", "created": "2026-10-01T09:00:00Z" })
+}
+
+/// The instance's users: alice (the token's owner) and bob.
+fn users() -> Vec<Value> {
+    vec![
+        user(),
+        json!({ "id": 2, "name": "Bob", "username": "bob", "created": "2026-10-01T09:00:00Z" }),
+    ]
 }
 
 pub fn task(id: i64, title: &str, project_id: i64) -> Value {
@@ -92,6 +102,7 @@ impl Fake {
         let fake = Fake {
             base: String::new(),
             token: fresh_token(),
+            forbidden_token: format!("{}_ro", fresh_token()),
             data: Arc::new(Mutex::new(Data::default())),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -225,6 +236,12 @@ async fn handle(
     if path == "info" {
         return json_response(StatusCode::OK, json!({ "version": "v2.7.1-fake" }));
     }
+    if rec.auth.as_deref() == Some(&format!("Bearer {}", fake.forbidden_token)) {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            json!({ "code": 11, "message": "Forbidden" }),
+        );
+    }
     if rec.auth.as_deref() != Some(&format!("Bearer {}", fake.token)) {
         return json_response(
             StatusCode::UNAUTHORIZED,
@@ -237,6 +254,44 @@ async fn handle(
     let mut d = fake.data.lock().unwrap();
     match (method.as_str(), segs.as_slice()) {
         ("GET", ["user"]) => json_response(StatusCode::OK, user()),
+        ("GET", ["users"]) => {
+            // Vikunja matches a username exactly (case-insensitive) and answers null for none.
+            let s = rec.param("s").unwrap_or_default();
+            let hits: Vec<Value> = users()
+                .into_iter()
+                .filter(|u| u["username"].as_str().unwrap().eq_ignore_ascii_case(&s))
+                .collect();
+            if hits.is_empty() {
+                json_response(StatusCode::OK, Value::Null)
+            } else {
+                json_response(StatusCode::OK, Value::Array(hits))
+            }
+        }
+        ("PUT", ["tasks", id, "assignees"]) => {
+            let uid = body["user_id"].as_i64().unwrap_or(0);
+            let Some(u) = users().into_iter().find(|u| u["id"] == uid) else {
+                return not_found();
+            };
+            let Some(t) = d.tasks.iter_mut().find(|t| same_id(&t["id"], id)) else {
+                return not_found();
+            };
+            let mut list = t["assignees"].as_array().cloned().unwrap_or_default();
+            list.push(u);
+            t["assignees"] = Value::Array(list);
+            json_response(StatusCode::CREATED, json!({ "user_id": uid }))
+        }
+        ("DELETE", ["tasks", id, "assignees", uid]) => {
+            let Some(t) = d.tasks.iter_mut().find(|t| same_id(&t["id"], id)) else {
+                return not_found();
+            };
+            let mut list = t["assignees"].as_array().cloned().unwrap_or_default();
+            list.retain(|u| !same_id(&u["id"], uid));
+            t["assignees"] = Value::Array(list);
+            json_response(
+                StatusCode::OK,
+                json!({ "message": "Successfully deleted." }),
+            )
+        }
         ("GET", ["projects"]) => paginate(d.projects.clone(), &rec),
         ("GET", ["labels"]) => paginate(d.labels.clone(), &rec),
         ("PUT", ["labels"]) => {

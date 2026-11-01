@@ -6,7 +6,7 @@
 //!
 //! Starts a throwaway `vikunja/vikunja` container (override the image with
 //! `EMPEROR_VIKUNJA_IMAGE`), registers a user with a random password, creates an API token
-//! with the permissions the README lists, and drives the six tools through the MCP HTTP server.
+//! with the permissions the README lists, and drives the six tools through the MCP HTTP server, with and without `X-Upstream-Url`.
 //! The container is removed afterwards. Skipped when `docker info` fails.
 
 mod common;
@@ -14,7 +14,7 @@ mod common;
 use std::process::Command;
 use std::time::Duration;
 
-use common::mcp::{call, start};
+use common::mcp::{call, call_with, rpc, rpc_raw, start, start_with, tool_call};
 use serde_json::{Value, json};
 
 const DEFAULT_IMAGE: &str = "vikunja/vikunja:latest";
@@ -54,8 +54,9 @@ fn token_permissions() -> Value {
         "tasks": ["read_all", "read_one", "create", "update"],
         "tasks_comments": ["read_all", "create"],
         "tasks_labels": ["read_all", "create", "delete"],
+        "tasks_assignees": ["read_all", "create", "delete"],
         "labels": ["read_all", "create"],
-        "other": ["user"]
+        "other": ["user", "users"]
     })
 }
 
@@ -158,6 +159,15 @@ async fn all_tools_against_real_vikunja() {
     let auth = format!("Bearer {token}");
     let auth = Some(auth.as_str());
 
+    // tools/list from the running server holds to the emperor-mcp rules
+    let list = rpc(
+        &mcp,
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        None,
+    )
+    .await;
+    emperor_mcp::testkit::assert_tools_json(&list);
+
     // list_projects
     let projects = call(&mcp, auth, "list_projects", json!({})).await;
     assert!(!projects.is_error, "{}", projects.text);
@@ -172,16 +182,32 @@ async fn all_tools_against_real_vikunja() {
         "{titles:?}"
     );
 
-    // create_task, with a new label and Markdown
+    // an unknown label is refused unless creation is asked for
+    let refused = call(
+        &mcp,
+        auth,
+        "create_task",
+        json!({ "project": "Work", "title": "Ship 0.1", "labels": ["release"] }),
+    )
+    .await;
+    assert!(
+        refused.is_error && refused.text.contains("create_missing_labels"),
+        "{}",
+        refused.text
+    );
+
+    // create_task, with a new label, an assignee and Markdown
     let created = call(
         &mcp,
         auth,
         "create_task",
         json!({ "project": "Work", "title": "Ship 0.1", "description": "Check the **gate** first.",
-                "labels": ["release"], "priority": 4, "due": "2026-11-05" }),
+                "labels": ["release"], "create_missing_labels": true, "assignees": ["mcpuser"],
+                "priority": 4, "due": "2026-11-05" }),
     )
     .await;
     assert!(!created.is_error, "{}", created.text);
+    assert_eq!(created.structured["assignees"], json!(["mcpuser"]));
     let id = created.structured["id"].as_i64().unwrap();
     let second = call(
         &mcp,
@@ -247,6 +273,24 @@ async fn all_tools_against_real_vikunja() {
             .contains("green")
     );
     assert_eq!(got.structured["due"], "2026-11-05T00:00:00Z");
+    assert_eq!(
+        got.structured["assignees"],
+        json!(["mcpuser"]),
+        "{}",
+        got.text
+    );
+    let nobody = call(
+        &mcp,
+        auth,
+        "update_task",
+        json!({ "id": id, "add_assignees": ["nobody_here"] }),
+    )
+    .await;
+    assert!(
+        nobody.is_error && nobody.text.contains("no user named"),
+        "{}",
+        nobody.text
+    );
 
     // update_task: done, move, labels, clear due
     let upd = call(
@@ -254,7 +298,8 @@ async fn all_tools_against_real_vikunja() {
         auth,
         "update_task",
         json!({ "id": id, "done": true, "project": "Inbox", "add_labels": ["shipped"],
-                "remove_labels": ["release"], "due": "none", "title": "Shipped 0.1" }),
+                "remove_labels": ["release"], "create_missing_labels": true,
+                "remove_assignees": ["mcpuser"], "due": "none", "title": "Shipped 0.1" }),
     )
     .await;
     assert!(!upd.is_error, "{}", upd.text);
@@ -263,6 +308,7 @@ async fn all_tools_against_real_vikunja() {
     assert_eq!(after.structured["title"], "Shipped 0.1");
     assert_eq!(after.structured["project"]["title"], "Inbox");
     assert_eq!(after.structured["labels"], json!(["shipped"]));
+    assert_eq!(after.structured["assignees"], json!([]), "{}", after.text);
     assert_eq!(after.structured["due"], Value::Null, "{}", after.text);
     assert!(
         after.structured["description"]
@@ -277,12 +323,26 @@ async fn all_tools_against_real_vikunja() {
     // no token, wrong token
     let anon = call(&mcp, None, "list_tasks", json!({})).await;
     assert!(anon.is_error && anon.text.contains("No Vikunja token"));
-    let wrong = call(&mcp, Some("Bearer tk_wrong"), "list_projects", json!({})).await;
-    assert!(
-        wrong.is_error && wrong.text.contains("refused the token"),
-        "{}",
-        wrong.text
-    );
+    let (status, _, wrong) = rpc_raw(
+        &mcp,
+        tool_call("list_projects", json!({})),
+        &[("Authorization", "Bearer tk_wrong")],
+    )
+    .await;
+    assert_eq!(status, 401, "{wrong}");
+    assert_eq!(wrong["error"]["data"]["httpStatus"], 401, "{wrong}");
+
+    // no --base-url: the instance comes from X-Upstream-Url (http is fine on loopback)
+    let bare = start_with(None, false).await;
+    let bearer = format!("Bearer {token}");
+    let via_header = call_with(
+        &bare,
+        &[("Authorization", &bearer), ("X-Upstream-Url", &base)],
+        "list_tasks",
+        json!({ "done": true }),
+    )
+    .await;
+    assert_eq!(via_header.structured["count"], 1, "{}", via_header.text);
 
     // doctor, as an operator would run it
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_emperor-vikunja"))

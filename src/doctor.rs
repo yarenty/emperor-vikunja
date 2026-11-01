@@ -5,19 +5,51 @@ use std::net::SocketAddr;
 use emperor_mcp::doctor::{Check, Report, env_set, port_free, tool_budget};
 
 use crate::client::{Token, Vikunja};
-use crate::server::{TOKEN_ENV, VikunjaServer};
+use crate::server::{TOKEN_ENV, UPSTREAM_URL_HEADER, VikunjaServer};
 
-/// Run every check. `stdio` skips the listen-address check and makes the token mandatory.
-pub async fn run(base_url: &str, bind: SocketAddr, stdio: bool) -> Report {
+/// What `doctor` checks: the same flags `serve` takes.
+#[derive(Debug, Clone, Copy)]
+pub struct Setup<'a> {
+    /// `--base-url` / `VIKUNJA_URL`, if given.
+    pub base_url: Option<&'a str>,
+    /// Listen address for HTTP mode.
+    pub bind: SocketAddr,
+    /// stdio mode: skips the listen-address check, makes the URL and the token mandatory.
+    pub stdio: bool,
+    /// `--read-only`: only the read tools are served.
+    pub read_only: bool,
+}
+
+/// Run every check.
+pub async fn run(setup: &Setup<'_>) -> Report {
     let mut report = Report::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+    let stdio = setup.stdio;
 
-    let client = match Vikunja::new(base_url) {
-        Ok(c) => {
-            report.push(Check::pass("base url", c.base_url().as_str()));
-            Some(c)
+    let client = match setup.base_url {
+        Some(url) => match Vikunja::new(url) {
+            Ok(c) => {
+                report.push(Check::pass("base url", c.base_url().as_str()));
+                Some(c)
+            }
+            Err(e) => {
+                report.push(Check::fail("base url", e.to_string()));
+                None
+            }
+        },
+        None if stdio => {
+            report.push(Check::fail(
+                "base url",
+                "not set; stdio mode needs --base-url or VIKUNJA_URL",
+            ));
+            None
         }
-        Err(e) => {
-            report.push(Check::fail("base url", e.to_string()));
+        None => {
+            report.push(Check::warn(
+                "base url",
+                format!(
+                    "not set: every request must name its Vikunja in the {UPSTREAM_URL_HEADER} header"
+                ),
+            ));
             None
         }
     };
@@ -58,9 +90,19 @@ pub async fn run(base_url: &str, bind: SocketAddr, stdio: bool) -> Report {
         });
     }
 
+    let tools = VikunjaServer::tools(setup.read_only);
+    let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+    report.push(Check::pass(
+        "mode",
+        if setup.read_only {
+            format!("read-only: {} (write tools removed)", names.join(", "))
+        } else {
+            format!("read-write: {}", names.join(", "))
+        },
+    ));
     if !stdio {
-        report.push(port_free(bind));
+        report.push(port_free(setup.bind));
     }
-    report.push(tool_budget(VikunjaServer::tools().len()));
+    report.push(tool_budget(tools.len()));
     report
 }

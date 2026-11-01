@@ -19,7 +19,7 @@ pub mod doctor;
 pub mod server;
 pub mod text;
 
-pub use client::{Token, Vikunja};
+pub use client::{Token, Upstreams, Vikunja};
 pub use server::VikunjaServer;
 
 /// Log to stderr with an `RUST_LOG` filter (default `info`, rmcp at `warn`). Stderr keeps

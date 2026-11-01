@@ -1,7 +1,10 @@
 //! MCP-over-HTTP helpers: start the server through emperor-mcp `serve`, send JSON-RPC.
 
 use emperor_mcp::{ServeOptions, serve};
-use emperor_vikunja::{Vikunja, VikunjaServer};
+use emperor_vikunja::server::forward_config;
+use emperor_vikunja::{Upstreams, VikunjaServer};
+use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
 
 fn free_port() -> u16 {
@@ -14,11 +17,17 @@ fn free_port() -> u16 {
 
 /// Start the MCP server in front of the Vikunja at `vikunja_url`; returns its base URL.
 pub async fn start(vikunja_url: &str) -> String {
+    start_with(Some(vikunja_url), false).await
+}
+
+/// Start the MCP server with an optional default Vikunja and optionally read-only.
+pub async fn start_with(vikunja_url: Option<&str>, read_only: bool) -> String {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], free_port()));
-    let client = Vikunja::new(vikunja_url).unwrap();
-    tokio::spawn(serve(ServeOptions::new(addr), move || {
-        VikunjaServer::http(client.clone())
-    }));
+    let upstreams = Upstreams::new(vikunja_url).unwrap();
+    tokio::spawn(serve(
+        ServeOptions::new(addr).with_forward(forward_config()),
+        move || VikunjaServer::http(upstreams.clone()).read_only(read_only),
+    ));
     let base = format!("http://{addr}");
     for _ in 0..50 {
         if reqwest::get(format!("{base}/health")).await.is_ok() {
@@ -29,17 +38,23 @@ pub async fn start(vikunja_url: &str) -> String {
     panic!("MCP server did not start");
 }
 
-pub async fn rpc(base: &str, body: Value, auth: Option<&str>) -> Value {
+/// One JSON-RPC exchange: HTTP status, response headers, decoded body.
+pub async fn rpc_raw(
+    base: &str,
+    body: Value,
+    headers: &[(&str, &str)],
+) -> (StatusCode, HeaderMap, Value) {
     let mut req = reqwest::Client::new()
         .post(format!("{base}/mcp"))
         .header("Accept", "application/json, text/event-stream")
         .header("MCP-Protocol-Version", "2025-06-18")
         .json(&body);
-    if let Some(a) = auth {
-        req = req.header("Authorization", a);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
     }
     let resp = req.send().await.unwrap();
-    assert!(resp.status().is_success(), "status {}", resp.status());
+    let status = resp.status();
+    let resp_headers = resp.headers().clone();
     let text = resp.text().await.unwrap();
     let json = text
         .lines()
@@ -47,7 +62,19 @@ pub async fn rpc(base: &str, body: Value, auth: Option<&str>) -> Value {
         .unwrap_or(&text)
         .trim()
         .to_string();
-    serde_json::from_str(&json).unwrap_or_else(|e| panic!("bad body {text}: {e}"))
+    let value = serde_json::from_str(&json).unwrap_or_else(|e| panic!("bad body {text}: {e}"));
+    (status, resp_headers, value)
+}
+
+pub async fn rpc(base: &str, body: Value, auth: Option<&str>) -> Value {
+    let headers: Vec<(&str, &str)> = auth.map(|a| ("Authorization", a)).into_iter().collect();
+    let (status, _, value) = rpc_raw(base, body, &headers).await;
+    assert!(status.is_success(), "status {status}: {value}");
+    value
+}
+
+pub fn tool_call(tool: &str, args: Value) -> Value {
+    json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":tool,"arguments":args}})
 }
 
 pub struct Call {
@@ -56,13 +83,7 @@ pub struct Call {
     pub is_error: bool,
 }
 
-pub async fn call(base: &str, auth: Option<&str>, tool: &str, args: Value) -> Call {
-    let v = rpc(
-        base,
-        json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":tool,"arguments":args}}),
-        auth,
-    )
-    .await;
+fn to_call(v: &Value) -> Call {
     let result = &v["result"];
     assert!(result.is_object(), "no result: {v}");
     Call {
@@ -73,4 +94,15 @@ pub async fn call(base: &str, auth: Option<&str>, tool: &str, args: Value) -> Ca
         structured: result["structuredContent"].clone(),
         is_error: result["isError"].as_bool().unwrap_or(false),
     }
+}
+
+pub async fn call(base: &str, auth: Option<&str>, tool: &str, args: Value) -> Call {
+    to_call(&rpc(base, tool_call(tool, args), auth).await)
+}
+
+/// A tool call with any request headers (e.g. `X-Upstream-Url`); the HTTP answer must be 2xx.
+pub async fn call_with(base: &str, headers: &[(&str, &str)], tool: &str, args: Value) -> Call {
+    let (status, _, v) = rpc_raw(base, tool_call(tool, args), headers).await;
+    assert!(status.is_success(), "status {status}: {v}");
+    to_call(&v)
 }

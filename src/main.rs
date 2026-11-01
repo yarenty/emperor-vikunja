@@ -4,10 +4,16 @@ use std::net::SocketAddr;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use emperor_mcp::{ServeOptions, serve};
-use emperor_vikunja::server::TOKEN_ENV;
+use emperor_mcp::cli::ServeArgs;
+use emperor_mcp::serve;
+use emperor_vikunja::client::Upstreams;
+use emperor_vikunja::server::{TOKEN_ENV, forward_config};
 use emperor_vikunja::{Token, Vikunja, VikunjaServer, doctor, init_tracing};
 use rmcp::ServiceExt;
+
+/// Where the HTTP server listens when `--bind` is not given.
+const DEFAULT_BIND: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 8034);
 
 #[derive(Parser)]
 #[command(
@@ -24,21 +30,22 @@ struct Cli {
 enum Command {
     /// Serve the tools over Streamable HTTP at /mcp (or over stdio with --stdio).
     Serve(Common),
-    /// Check the URL, the Vikunja API, the token and the listen address; exit 1 on failure.
+    /// Check the URL, the Vikunja API, the token, the mode and the listen address; exit 1 on
+    /// failure.
     Doctor(Common),
 }
 
 #[derive(Args)]
 struct Common {
-    /// Vikunja address, e.g. https://vikunja.example.com
+    /// Vikunja address, e.g. https://vikunja.example.com. Required with --stdio; over HTTP a
+    /// request can name its instance in the X-Upstream-Url header instead.
     #[arg(long, env = "VIKUNJA_URL")]
-    base_url: String,
-    /// Address to listen on in HTTP mode.
-    #[arg(long, default_value = "127.0.0.1:8034")]
-    bind: SocketAddr,
-    /// Speak MCP over stdin/stdout (local use); the token comes from VIKUNJA_TOKEN.
+    base_url: Option<String>,
+    /// Serve only the read tools (list_tasks, get_task, list_projects).
     #[arg(long)]
-    stdio: bool,
+    read_only: bool,
+    #[command(flatten)]
+    serve: ServeArgs,
 }
 
 #[tokio::main]
@@ -46,19 +53,35 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Doctor(c) => {
-            let report = doctor::run(&c.base_url, c.bind, c.stdio).await;
+            let report = doctor::run(&doctor::Setup {
+                base_url: c.base_url.as_deref(),
+                bind: c.serve.bind_or(DEFAULT_BIND),
+                stdio: c.serve.stdio,
+                read_only: c.read_only,
+            })
+            .await;
             report.print();
             std::process::exit(report.exit_code());
         }
         Command::Serve(c) => {
             init_tracing();
-            let client = Vikunja::new(&c.base_url)?;
             let env_token = std::env::var(TOKEN_ENV).ok().and_then(Token::new);
-            if c.stdio {
+            let mode = if c.read_only {
+                "read-only"
+            } else {
+                "read-write"
+            };
+            if c.serve.stdio {
+                let base = c
+                    .base_url
+                    .as_deref()
+                    .context("--base-url (or VIKUNJA_URL) is required with --stdio")?;
+                let client = Vikunja::new(base)?;
                 let token = env_token
                     .with_context(|| format!("{TOKEN_ENV} is not set; stdio mode needs it"))?;
-                tracing::info!(base = %client.base_url(), "serving Vikunja tools over stdio");
+                tracing::info!(base = %client.base_url(), mode, "serving Vikunja tools over stdio");
                 let running = VikunjaServer::local(client, token)
+                    .read_only(c.read_only)
                     .serve(rmcp::transport::stdio())
                     .await?;
                 running.waiting().await?;
@@ -68,10 +91,23 @@ async fn main() -> anyhow::Result<()> {
                         "{TOKEN_ENV} is ignored in HTTP mode: each request brings its own Authorization header"
                     );
                 }
-                tracing::info!(base = %client.base_url(), "serving Vikunja tools over HTTP");
-                serve(ServeOptions::new(c.bind), move || {
-                    VikunjaServer::http(client.clone())
-                })
+                let upstreams = Upstreams::new(c.base_url.as_deref())?;
+                match upstreams.default_instance() {
+                    Some(v) => {
+                        tracing::info!(base = %v.base_url(), mode, "serving Vikunja tools over HTTP")
+                    }
+                    None => tracing::warn!(
+                        mode,
+                        "no --base-url: every request must name its Vikunja in X-Upstream-Url"
+                    ),
+                }
+                let read_only = c.read_only;
+                serve(
+                    c.serve
+                        .serve_options(DEFAULT_BIND)
+                        .with_forward(forward_config()),
+                    move || VikunjaServer::http(upstreams.clone()).read_only(read_only),
+                )
                 .await?;
             }
             Ok(())
