@@ -33,6 +33,14 @@ pub enum Error {
     /// The base URL is not a usable http(s) URL.
     #[error("invalid Vikunja URL `{0}`: use something like https://vikunja.example.com")]
     BadUrl(String),
+    /// A caller-supplied upstream URL that is plain `http` to a host that is not loopback.
+    #[error("refusing X-Upstream-Url `{0}`: use https (plain http is allowed only for localhost)")]
+    InsecureUpstream(String),
+    /// Neither the request nor the server configuration names a Vikunja instance.
+    #[error(
+        "no Vikunja URL: send the X-Upstream-Url header with the request, or start the server with --base-url"
+    )]
+    NoUpstream,
     /// Vikunja refused the token.
     #[error("Vikunja refused the token (HTTP {status}): {message}")]
     Unauthorized {
@@ -313,6 +321,86 @@ pub fn sort_tasks(tasks: &mut [Task]) {
 
 /* --- client ------------------------------------------------------------------------------------ */
 
+fn http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .user_agent(concat!("emperor-vikunja/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| Error::Transport(e.to_string()))
+}
+
+/// Where tool calls go: the instance a caller names in the `X-Upstream-Url` header, else the
+/// operator's `--base-url`. One connection pool serves both.
+#[derive(Clone, Debug)]
+pub struct Upstreams {
+    http: reqwest::Client,
+    default: Option<Vikunja>,
+}
+
+impl Upstreams {
+    /// Upstreams with an optional default instance (`--base-url`).
+    pub fn new(default_base_url: Option<&str>) -> Result<Self> {
+        let http = http_client()?;
+        let default = default_base_url
+            .map(|b| Vikunja::with_http(http.clone(), b))
+            .transpose()?;
+        Ok(Self { http, default })
+    }
+
+    /// Upstreams that always use `client` (stdio mode, tests).
+    pub fn fixed(client: Vikunja) -> Self {
+        Self {
+            http: client.http.clone(),
+            default: Some(client),
+        }
+    }
+
+    /// The default instance, if one was configured.
+    pub fn default_instance(&self) -> Option<&Vikunja> {
+        self.default.as_ref()
+    }
+
+    /// The instance for one call. A caller-named URL must be `https`, except for a loopback
+    /// host (`localhost`, `127.0.0.0/8`, `::1`), where `http` is allowed too.
+    pub fn resolve(&self, requested: Option<&str>) -> Result<Vikunja> {
+        match requested.map(str::trim).filter(|r| !r.is_empty()) {
+            Some(raw) => {
+                let base = parse_base(raw)?;
+                if base.scheme() != "https" && !is_loopback(&base) {
+                    return Err(Error::InsecureUpstream(raw.to_string()));
+                }
+                Vikunja::with_http(self.http.clone(), raw)
+            }
+            None => self.default.clone().ok_or(Error::NoUpstream),
+        }
+    }
+}
+
+/// Parse and normalise a base URL: http(s) with a host, trailing `/` and `/api/v1` dropped.
+fn parse_base(base_url: &str) -> Result<Url> {
+    let mut trimmed = base_url.trim().trim_end_matches('/').to_string();
+    if let Some(stripped) = trimmed.strip_suffix("/api/v1") {
+        trimmed = stripped.to_string();
+    }
+    let base = Url::parse(&format!("{trimmed}/")).map_err(|_| Error::BadUrl(base_url.into()))?;
+    if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
+        return Err(Error::BadUrl(base_url.into()));
+    }
+    Ok(base)
+}
+
+/// True for `localhost`, `127.0.0.0/8` and `::1`.
+fn is_loopback(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 /// A Vikunja instance: base URL plus a connection pool. Holds no credentials.
 #[derive(Clone, Debug)]
 pub struct Vikunja {
@@ -325,23 +413,14 @@ impl Vikunja {
     /// A client for the instance at `base_url` (`https://vikunja.example.com`; a trailing
     /// `/api/v1` is accepted and dropped).
     pub fn new(base_url: &str) -> Result<Self> {
-        let mut trimmed = base_url.trim().trim_end_matches('/').to_string();
-        if let Some(stripped) = trimmed.strip_suffix("/api/v1") {
-            trimmed = stripped.to_string();
-        }
-        let base =
-            Url::parse(&format!("{trimmed}/")).map_err(|_| Error::BadUrl(base_url.into()))?;
-        if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
-            return Err(Error::BadUrl(base_url.into()));
-        }
+        Self::with_http(http_client()?, base_url)
+    }
+
+    fn with_http(http: reqwest::Client, base_url: &str) -> Result<Self> {
+        let base = parse_base(base_url)?;
         let api = base
             .join("api/v1/")
             .map_err(|_| Error::BadUrl(base_url.into()))?;
-        let http = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .user_agent(concat!("emperor-vikunja/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|e| Error::Transport(e.to_string()))?;
         Ok(Self { http, base, api })
     }
 
@@ -462,8 +541,13 @@ impl Session<'_> {
             .await
     }
 
-    /// Labels by title (case-insensitive), creating the ones that do not exist yet.
-    pub async fn ensure_labels(&self, titles: &[String]) -> Result<Vec<Label>> {
+    /// Labels by title (case-insensitive). Titles with no label are created when
+    /// `create_missing` is true, and refused (nothing created) when it is false.
+    pub async fn resolve_labels(
+        &self,
+        titles: &[String],
+        create_missing: bool,
+    ) -> Result<Vec<Label>> {
         let wanted: Vec<&str> = titles
             .iter()
             .map(|t| t.trim())
@@ -473,6 +557,23 @@ impl Session<'_> {
             return Ok(Vec::new());
         }
         let mut known = self.labels().await?;
+        if !create_missing {
+            let missing: Vec<&str> = wanted
+                .iter()
+                .copied()
+                .filter(|w| !known.iter().any(|l| l.title.eq_ignore_ascii_case(w)))
+                .collect();
+            if !missing.is_empty() {
+                return Err(Error::Invalid(format!(
+                    "no label named {}; pass create_missing_labels: true to create them",
+                    missing
+                        .iter()
+                        .map(|m| format!("`{m}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
         let mut out: Vec<Label> = Vec::new();
         for title in wanted {
             let found = known
@@ -492,6 +593,67 @@ impl Session<'_> {
             }
         }
         Ok(out)
+    }
+
+    /// Users by username (case-insensitive exact match, through `GET /users?s=`). An unknown
+    /// name is refused with every unknown name listed.
+    pub async fn resolve_users(&self, usernames: &[String]) -> Result<Vec<User>> {
+        let mut out: Vec<User> = Vec::new();
+        let mut unknown: Vec<String> = Vec::new();
+        for name in usernames.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+            let name = name.trim_start_matches('@');
+            let hits: Option<Vec<User>> = decode(
+                self.request(Method::GET, "users")?
+                    .query(&[("s", name)])
+                    .send()
+                    .await?,
+                "users",
+            )
+            .await?;
+            match hits
+                .unwrap_or_default()
+                .into_iter()
+                .find(|u| u.username.eq_ignore_ascii_case(name))
+            {
+                Some(u) if !out.iter().any(|o| o.id == u.id) => out.push(u),
+                Some(_) => {}
+                None => unknown.push(format!("`{name}`")),
+            }
+        }
+        if unknown.is_empty() {
+            Ok(out)
+        } else {
+            Err(Error::Invalid(format!(
+                "no user named {} (assignees are usernames)",
+                unknown.join(", ")
+            )))
+        }
+    }
+
+    /// `PUT /tasks/{id}/assignees`: assign a user to a task.
+    pub async fn add_assignee(&self, task_id: i64, user_id: i64) -> Result<()> {
+        let _: Value = self
+            .send(
+                Method::PUT,
+                &format!("tasks/{task_id}/assignees"),
+                &json!({ "user_id": user_id }),
+                &format!("task {task_id}"),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// `DELETE /tasks/{id}/assignees/{user}`: unassign a user.
+    pub async fn remove_assignee(&self, task_id: i64, user_id: i64) -> Result<()> {
+        let resp = self
+            .request(
+                Method::DELETE,
+                &format!("tasks/{task_id}/assignees/{user_id}"),
+            )?
+            .send()
+            .await?;
+        let _: Value = decode(resp, &format!("assignee {user_id} on task {task_id}")).await?;
+        Ok(())
     }
 
     /// `GET /tasks` with the query's filter, every page, then filtered and sorted locally.
@@ -723,6 +885,48 @@ mod tests {
             "http://host:3456/vikunja/api/v1/user"
         );
         assert!(Vikunja::new("ftp://x").is_err());
+
+        // A caller-named upstream: https anywhere, http only on loopback.
+        let up = Upstreams::fixed(v.clone());
+        assert_eq!(
+            up.resolve(Some("https://other.example.org/api/v1"))
+                .unwrap()
+                .base_url()
+                .as_str(),
+            "https://other.example.org/"
+        );
+        for ok in [
+            "http://localhost:3456",
+            "http://127.0.0.1:3456",
+            "http://127.9.9.9",
+            "http://[::1]:3456",
+        ] {
+            assert!(up.resolve(Some(ok)).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://tasks.example.com",
+            "http://10.0.0.5:3456",
+            "http://localhost.example.com",
+            "ftp://localhost",
+            "not a url",
+        ] {
+            assert!(up.resolve(Some(bad)).is_err(), "{bad}");
+        }
+        assert!(matches!(
+            up.resolve(Some("http://tasks.example.com")),
+            Err(Error::InsecureUpstream(_))
+        ));
+        assert_eq!(
+            up.resolve(None).unwrap().base_url().as_str(),
+            "https://tasks.example.com/"
+        );
+        assert_eq!(
+            up.resolve(Some("  ")).unwrap().base_url().as_str(),
+            "https://tasks.example.com/",
+            "an empty header falls back to the default"
+        );
+        let none = Upstreams::new(None).unwrap();
+        assert!(matches!(none.resolve(None), Err(Error::NoUpstream)));
         assert!(Vikunja::new("not a url").is_err());
     }
 }

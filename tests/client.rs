@@ -122,9 +122,21 @@ async fn every_page_is_read_and_results_are_sorted() {
 async fn new_labels_are_created_existing_ones_reused() {
     let fake = Fake::seeded().await;
     let token = Token::new(fake.token.clone()).unwrap();
+    let wanted = ["NOW".into(), "release".into(), "release".into(), " ".into()];
+    let refused = client(&fake)
+        .session(&token)
+        .resolve_labels(&wanted, false)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("`release`") && refused.contains("create_missing_labels"),
+        "{refused}"
+    );
+    assert!(fake.requests_to("PUT", "/api/v1/labels").is_empty());
     let labels = client(&fake)
         .session(&token)
-        .ensure_labels(&["NOW".into(), "release".into(), "release".into(), " ".into()])
+        .resolve_labels(&wanted, true)
         .await
         .unwrap();
     let titles: Vec<&str> = labels.iter().map(|l| l.title.as_str()).collect();
@@ -132,6 +144,26 @@ async fn new_labels_are_created_existing_ones_reused() {
     let created = fake.requests_to("PUT", "/api/v1/labels");
     assert_eq!(created.len(), 1, "only the missing label is created");
     assert_eq!(created[0].body.as_ref().unwrap()["title"], "release");
+}
+
+#[tokio::test]
+async fn users_by_username() {
+    let fake = Fake::seeded().await;
+    let token = Token::new(fake.token.clone()).unwrap();
+    let s_client = client(&fake);
+    let s = s_client.session(&token);
+    let users = s
+        .resolve_users(&["Bob".into(), "@alice".into(), "bob".into()])
+        .await
+        .unwrap();
+    let ids: Vec<i64> = users.iter().map(|u| u.id).collect();
+    assert_eq!(ids, vec![2, 1]);
+    let err = s
+        .resolve_users(&["bob".into(), "carol".into(), "dave".into()])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("`carol`, `dave`"), "{err}");
 }
 
 #[tokio::test]

@@ -10,8 +10,24 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 async fn exchange(fake: &Fake, token: Option<&str>) -> (Option<Value>, String) {
+    exchange_with(
+        fake,
+        token,
+        &[],
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_projects","arguments":{}}}),
+    )
+    .await
+}
+
+async fn exchange_with(
+    fake: &Fake,
+    token: Option<&str>,
+    extra_args: &[&str],
+    request: Value,
+) -> (Option<Value>, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_emperor-vikunja"));
     cmd.args(["serve", "--stdio", "--base-url", &fake.base])
+        .args(extra_args)
         .env_remove("VIKUNJA_TOKEN")
         .env_remove("VIKUNJA_URL")
         .stdin(Stdio::piped())
@@ -30,7 +46,7 @@ async fn exchange(fake: &Fake, token: Option<&str>) -> (Option<Value>, String) {
             "protocolVersion":"2025-06-18","capabilities":{},
             "clientInfo":{"name":"test","version":"0"}}}),
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
-        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_projects","arguments":{}}}),
+        request,
     ];
     let mut reply = None;
     for m in messages {
@@ -77,4 +93,94 @@ async fn stdio_without_token_refuses_to_start() {
     let (reply, stderr) = exchange(&fake, None).await;
     assert!(reply.is_none());
     assert!(stderr.contains("VIKUNJA_TOKEN is not set"), "{stderr}");
+}
+
+#[tokio::test]
+async fn stdio_rejected_token_is_a_jsonrpc_error() {
+    let fake = Fake::seeded().await;
+    let (reply, stderr) = exchange(&fake, Some("wrong")).await;
+    let reply = reply.unwrap_or_else(|| panic!("no reply; stderr: {stderr}"));
+    assert_eq!(reply["error"]["code"], -32040, "{reply}");
+    assert_eq!(reply["error"]["data"]["httpStatus"], 401, "{reply}");
+}
+
+#[tokio::test]
+async fn stdio_read_only_lists_three_tools() {
+    let fake = Fake::seeded().await;
+    let (reply, stderr) = exchange_with(
+        &fake,
+        Some(&fake.token),
+        &["--read-only"],
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    )
+    .await;
+    let reply = reply.unwrap_or_else(|| panic!("no reply; stderr: {stderr}"));
+    emperor_mcp::testkit::assert_tools_json(&reply);
+    let mut names: Vec<&str> = reply["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["get_task", "list_projects", "list_tasks"]);
+}
+
+fn doctor(args: &[&str], token: Option<&str>) -> (bool, String) {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_emperor-vikunja"));
+    cmd.arg("doctor")
+        .args(args)
+        .env_remove("VIKUNJA_TOKEN")
+        .env_remove("VIKUNJA_URL");
+    if let Some(t) = token {
+        cmd.env("VIKUNJA_TOKEN", t);
+    }
+    let out = cmd.output().unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+#[tokio::test]
+async fn doctor_reports_the_mode() {
+    let fake = Fake::seeded().await;
+    let base = fake.base.clone();
+    let token = fake.token.clone();
+    let (ok, report) = tokio::task::spawn_blocking(move || {
+        doctor(
+            &["--base-url", &base, "--stdio", "--read-only"],
+            Some(&token),
+        )
+    })
+    .await
+    .unwrap();
+    assert!(ok, "{report}");
+    assert!(report.contains("read-only: "), "{report}");
+    assert!(report.contains("write tools removed"), "{report}");
+    assert!(report.contains("3 of at most 8"), "{report}");
+    assert!(!report.contains(&fake.token), "{report}");
+
+    let base = fake.base.clone();
+    let token = fake.token.clone();
+    let (ok, report) = tokio::task::spawn_blocking(move || {
+        doctor(&["--base-url", &base, "--stdio"], Some(&token))
+    })
+    .await
+    .unwrap();
+    assert!(ok, "{report}");
+    assert!(report.contains("read-write: "), "{report}");
+    assert!(report.contains("6 of at most 8"), "{report}");
+}
+
+#[test]
+fn doctor_without_base_url() {
+    // HTTP mode: a warning, the header can supply it.
+    let (ok, report) = doctor(&["--bind", "127.0.0.1:0"], None);
+    assert!(ok, "{report}");
+    assert!(report.contains("X-Upstream-Url"), "{report}");
+    // stdio mode: a failure.
+    let (ok, report) = doctor(&["--stdio"], Some("t"));
+    assert!(!ok, "{report}");
+    assert!(report.contains("stdio mode needs --base-url"), "{report}");
 }

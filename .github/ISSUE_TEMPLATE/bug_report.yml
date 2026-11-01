@@ -1,0 +1,41 @@
+name: Bug report
+description: Something does not work as the README says
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never paste a Vikunja token. `emperor-vikunja doctor` shows only its length.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The tool call or command, what you expected and what you got.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: emperor-vikunja version
+      placeholder: emperor-vikunja --version
+    validations:
+      required: true
+  - type: input
+    id: vikunja
+    attributes:
+      label: Vikunja version
+      placeholder: from `emperor-vikunja doctor` or /api/v1/info
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options: [stdio, HTTP]
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      placeholder: Claude Desktop, Claude Code, kowalski, ...
+  - type: textarea
+    id: doctor
+    attributes:
+      label: doctor output
+      render: text

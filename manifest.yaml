@@ -16,15 +16,21 @@ headers:
     ui:
       label: Vikunja API token
       hint: Vikunja > Settings > API Tokens. Forwarded with every request, never stored by the server.
+  X-Upstream-Url:
+    template: "{url}"
+    secret: false
+    ui:
+      label: Vikunja URL for this connection
+      hint: Optional. Address of your Vikunja, e.g. https://vikunja.example.com (https, or http on localhost). Overrides the server's --base-url.
 tools:
   - name: list_tasks
     description: List tasks (open by default) sorted by priority then due date; filter by project, label, done, due_before, search.
   - name: get_task
     description: Read one task with every field, its description as text and its comments.
   - name: create_task
-    description: Create a task with a Markdown description, labels (created when new), priority 0-5 and due date.
+    description: Create a task with a Markdown description, labels (created only with create_missing_labels), assignees by username, priority 0-5 and due date.
   - name: update_task
-    description: Change title, description, done, priority, due date or labels of a task, or move it to another project.
+    description: Change title, description, done, priority, due date, labels or assignees of a task, or move it to another project.
   - name: comment
     description: Add a Markdown comment to a task.
   - name: list_projects
@@ -32,13 +38,18 @@ tools:
 config:
   parameters:
     type: object
-    required: [base_url]
     properties:
       base_url:
         type: string
         ui:
           label: Vikunja URL
-          hint: Address of the Vikunja instance, e.g. https://vikunja.example.com (flag --base-url or env VIKUNJA_URL).
+          hint: Default Vikunja instance, e.g. https://vikunja.example.com (flag --base-url or env VIKUNJA_URL). Optional over HTTP when clients send X-Upstream-Url.
+      read_only:
+        type: boolean
+        default: false
+        ui:
+          label: Read-only
+          hint: Serve only list_tasks, get_task and list_projects (flag --read-only).
       bind:
         type: string
         default: 127.0.0.1:8034
