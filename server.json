@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.yarenty/emperor-vikunja",
   "title": "Vikunja tasks",
-  "description": "Vikunja tasks for MCP clients: list, read, create and update tasks, comment, list projects.",
-  "version": "0.1.2",
+  "description": "Vikunja tasks for MCP clients: list and read tasks and projects; with --writable, change them.",
+  "version": "0.2.0",
   "repository": {
     "url": "https://github.com/yarenty/emperor-vikunja",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "cargo",
       "identifier": "emperor-vikunja",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       },
@@ -32,9 +32,9 @@
         },
         {
           "type": "positional",
-          "value": "--read-only",
+          "value": "--writable",
           "isRequired": false,
-          "description": "Serve only list_tasks, get_task and list_projects; the write tools are removed."
+          "description": "Also serve create_task, update_task and comment. Without it the server is read-only (list_tasks, get_task, list_projects)."
         }
       ],
       "environmentVariables": [
@@ -53,8 +53,8 @@
           "format": "string"
         },
         {
-          "name": "VIKUNJA_READ_ONLY",
-          "description": "Set to true to serve only the read tools (same as --read-only); unset, empty or false leaves them all on.",
+          "name": "VIKUNJA_WRITABLE",
+          "description": "Set to true to also serve the write tools (same as --writable); unset, empty or false keeps the server read-only.",
           "isRequired": false,
           "isSecret": false,
           "format": "boolean"

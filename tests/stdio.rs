@@ -31,6 +31,7 @@ async fn exchange_with(
         .env_remove("VIKUNJA_TOKEN")
         .env_remove("VIKUNJA_URL")
         .env_remove("VIKUNJA_READ_ONLY")
+        .env_remove("VIKUNJA_WRITABLE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -105,44 +106,103 @@ async fn stdio_rejected_token_is_a_jsonrpc_error() {
     assert_eq!(reply["error"]["data"]["httpStatus"], 401, "{reply}");
 }
 
-#[tokio::test]
-async fn stdio_read_only_lists_three_tools() {
-    let fake = Fake::seeded().await;
+/// `tools/list` over stdio with `extra_args`: the sorted tool names and stderr.
+async fn listed(fake: &Fake, extra_args: &[&str]) -> (Vec<String>, String) {
     let (reply, stderr) = exchange_with(
-        &fake,
+        fake,
         Some(&fake.token),
-        &["--read-only"],
+        extra_args,
         json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
     )
     .await;
     let reply = reply.unwrap_or_else(|| panic!("no reply; stderr: {stderr}"));
     emperor_mcp::testkit::assert_tools_json(&reply);
-    let mut names: Vec<&str> = reply["result"]["tools"]
+    emperor_mcp::testkit::assert_compact_schemas_json(&reply);
+    let mut names: Vec<String> = reply["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|t| t["name"].as_str())
+        .filter_map(|t| t["name"].as_str().map(String::from))
         .collect();
     names.sort();
-    assert_eq!(names, vec!["get_task", "list_projects", "list_tasks"]);
+    if names.len() == 3 {
+        emperor_mcp::testkit::assert_read_only_default_json(&reply);
+    }
+    (names, stderr)
+}
+
+const READ: [&str; 3] = ["get_task", "list_projects", "list_tasks"];
+const ALL: [&str; 6] = [
+    "comment",
+    "create_task",
+    "get_task",
+    "list_projects",
+    "list_tasks",
+    "update_task",
+];
+
+#[tokio::test]
+async fn stdio_lists_three_tools_by_default() {
+    let fake = Fake::seeded().await;
+    let (names, stderr) = listed(&fake, &[]).await;
+    assert_eq!(names, READ);
+    assert!(stderr.contains("read-only"), "{stderr}");
+    assert!(!stderr.contains("deprecated"), "{stderr}");
+}
+
+#[tokio::test]
+async fn stdio_writable_lists_six_tools() {
+    let fake = Fake::seeded().await;
+    let (names, stderr) = listed(&fake, &["--writable"]).await;
+    assert_eq!(names, ALL);
+    assert!(stderr.contains("writable"), "{stderr}");
+}
+
+#[tokio::test]
+async fn stdio_read_only_is_a_deprecated_no_op() {
+    let fake = Fake::seeded().await;
+    let (names, stderr) = listed(&fake, &["--read-only"]).await;
+    assert_eq!(names, READ);
+    assert!(
+        stderr.contains("deprecated") && stderr.contains("--writable"),
+        "{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn stdio_read_only_with_writable_refuses_to_start() {
+    let fake = Fake::seeded().await;
+    let (reply, stderr) = exchange_with(
+        &fake,
+        Some(&fake.token),
+        &["--read-only", "--writable"],
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    )
+    .await;
+    assert!(reply.is_none(), "{reply:?}");
+    assert!(
+        stderr.contains("--read-only") && stderr.contains("--writable") && stderr.contains("both"),
+        "{stderr}"
+    );
 }
 
 fn doctor(args: &[&str], token: Option<&str>) -> (bool, String) {
     doctor_env(args, token, None)
 }
 
-fn doctor_env(args: &[&str], token: Option<&str>, read_only_env: Option<&str>) -> (bool, String) {
+fn doctor_env(args: &[&str], token: Option<&str>, writable_env: Option<&str>) -> (bool, String) {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_emperor-vikunja"));
     cmd.arg("doctor")
         .args(args)
         .env_remove("VIKUNJA_TOKEN")
         .env_remove("VIKUNJA_URL")
-        .env_remove("VIKUNJA_READ_ONLY");
+        .env_remove("VIKUNJA_READ_ONLY")
+        .env_remove("VIKUNJA_WRITABLE");
     if let Some(t) = token {
         cmd.env("VIKUNJA_TOKEN", t);
     }
-    if let Some(v) = read_only_env {
-        cmd.env("VIKUNJA_READ_ONLY", v);
+    if let Some(v) = writable_env {
+        cmd.env("VIKUNJA_WRITABLE", v);
     }
     let out = cmd.output().unwrap();
     (
@@ -154,41 +214,44 @@ fn doctor_env(args: &[&str], token: Option<&str>, read_only_env: Option<&str>) -
 #[tokio::test]
 async fn doctor_reports_the_mode() {
     let fake = Fake::seeded().await;
-    let base = fake.base.clone();
-    let token = fake.token.clone();
-    let (ok, report) = tokio::task::spawn_blocking(move || {
-        doctor(
-            &["--base-url", &base, "--stdio", "--read-only"],
-            Some(&token),
-        )
-    })
-    .await
-    .unwrap();
+    let run = |extra: &'static [&'static str]| {
+        let base = fake.base.clone();
+        let token = fake.token.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut args = vec!["--base-url", base.as_str(), "--stdio"];
+            args.extend_from_slice(extra);
+            doctor(&args, Some(&token))
+        })
+    };
+
+    let (ok, report) = run(&[]).await.unwrap();
     assert!(ok, "{report}");
     assert!(report.contains("read-only: "), "{report}");
-    assert!(report.contains("write tools removed"), "{report}");
+    assert!(report.contains("pass --writable"), "{report}");
     assert!(report.contains("3 of at most 8"), "{report}");
     assert!(!report.contains(&fake.token), "{report}");
 
-    let base = fake.base.clone();
-    let token = fake.token.clone();
-    let (ok, report) = tokio::task::spawn_blocking(move || {
-        doctor(&["--base-url", &base, "--stdio"], Some(&token))
-    })
-    .await
-    .unwrap();
+    let (ok, report) = run(&["--writable"]).await.unwrap();
     assert!(ok, "{report}");
-    assert!(report.contains("read-write: "), "{report}");
+    assert!(report.contains("writable: "), "{report}");
     assert!(report.contains("6 of at most 8"), "{report}");
+
+    let (ok, report) = run(&["--read-only"]).await.unwrap();
+    assert!(ok, "{report}");
+    assert!(report.contains("read-only: "), "{report}");
+    assert!(report.contains("deprecated"), "{report}");
+
+    let (ok, _) = run(&["--read-only", "--writable"]).await.unwrap();
+    assert!(!ok, "both switches are refused");
 }
 
 #[tokio::test]
-async fn doctor_reads_read_only_from_the_environment() {
+async fn doctor_reads_writable_from_the_environment() {
     let fake = Fake::seeded().await;
     for (value, mode) in [
-        ("true", "read-only: "),
-        ("", "read-write: "),
-        ("false", "read-write: "),
+        ("true", "writable: "),
+        ("", "read-only: "),
+        ("false", "read-only: "),
     ] {
         let base = fake.base.clone();
         let token = fake.token.clone();
@@ -200,7 +263,7 @@ async fn doctor_reads_read_only_from_the_environment() {
         assert!(ok, "{report}");
         assert!(
             report.contains(mode),
-            "VIKUNJA_READ_ONLY={value:?}: {report}"
+            "VIKUNJA_WRITABLE={value:?}: {report}"
         );
     }
 }

@@ -1,4 +1,4 @@
-//! The MCP server: six tools over one Vikunja instance.
+//! The MCP server: three read tools over one Vikunja instance, six when writing is switched on.
 //!
 //! Credentials: over HTTP the token arrives with every request in the forwarded
 //! `Authorization: Bearer ...` header and is dropped when the call ends; over stdio it comes
@@ -31,14 +31,18 @@
 //!   Vikunja does not keep, and labels and assignees can be taken off. A client that asks
 //!   before destructive calls should ask here.
 //!
-//! # Read-only mode
+//! # Read-only by default
 //!
-//! [`VikunjaServer::read_only`] removes `create_task`, `update_task` and `comment` from the
-//! router, so they are neither listed nor callable.
+//! A server starts read-only: `create_task`, `update_task` and `comment` ([`WRITE_TOOLS`]) are
+//! not in the router, so they are neither listed nor callable (Emperor Profile E11). The operator
+//! switches writing on with [`VikunjaServer::writable`] (`--writable` / `VIKUNJA_WRITABLE`).
+//!
+//! Input schemas are compacted ([`emperor_mcp::schema::CompactSchemas`], Emperor Profile E12).
 
 use std::sync::Arc;
 
 use emperor_mcp::limits::Limits;
+use emperor_mcp::schema::CompactSchemas;
 use emperor_mcp::{
     ForwardConfig, ForwardedHeaders, FrameKind, Rejection, credentials_rejected, structured_framed,
     truncate_chars,
@@ -74,8 +78,32 @@ pub const COMMENT_MAX_CHARS: usize = 4_000;
 /// Comments `get_task` returns (the most recent ones).
 pub const MAX_COMMENTS: usize = 50;
 
-/// The tools that change Vikunja; [`VikunjaServer::read_only`] removes them.
+/// The tools that change Vikunja; listed only with [`VikunjaServer::writable`].
 pub const WRITE_TOOLS: [&str; 3] = ["create_task", "update_task", "comment"];
+
+/// Environment variable that switches writing on (same as `--writable`).
+pub const WRITABLE_ENV: &str = "VIKUNJA_WRITABLE";
+
+/// Environment variable of the deprecated `--read-only` (read-only is the default).
+pub const READ_ONLY_ENV: &str = "VIKUNJA_READ_ONLY";
+
+/// Logged (and shown by `doctor`) when `--read-only` or `VIKUNJA_READ_ONLY` is given.
+pub const READ_ONLY_DEPRECATED: &str = "--read-only / VIKUNJA_READ_ONLY is deprecated and has no \
+    effect: the server is read-only unless --writable (VIKUNJA_WRITABLE) is given";
+
+/// Refusal when both switches are on.
+pub const MODE_CONFLICT: &str = "--read-only (VIKUNJA_READ_ONLY) and --writable \
+    (VIKUNJA_WRITABLE) are both on; pass only --writable to allow changes, or neither to stay \
+    read-only";
+
+/// The write mode from the two start-up switches: `Ok(true)` when writing is on. Both on is
+/// refused with [`MODE_CONFLICT`].
+pub fn write_mode(writable: bool, read_only: bool) -> Result<bool, &'static str> {
+    match (writable, read_only) {
+        (true, true) => Err(MODE_CONFLICT),
+        (w, _) => Ok(w),
+    }
+}
 
 /// Shown when a call carries no token.
 pub const MISSING_TOKEN: &str = "No Vikunja token. Over HTTP send `Authorization: Bearer <token>` \
@@ -91,8 +119,8 @@ Priority: 0 unset, 1 low, 2 medium, 3 high, 4 urgent, 5 do now. Dates: YYYY-MM-D
 
 const INSTRUCTIONS_READ_ONLY: &str = "Tasks in a Vikunja instance, read-only. Use list_projects \
 to see where tasks live, list_tasks to find tasks (open ones by default, highest priority \
-first) and get_task to read one with its description and comments. This server cannot create \
-or change tasks. Priority: 0 unset, 1 low, 2 medium, 3 high, 4 urgent, 5 do now. Dates: \
+first) and get_task to read one with its description and comments. This server is read-only: \
+it cannot create or change tasks. Priority: 0 unset, 1 low, 2 medium, 3 high, 4 urgent, 5 do now. Dates: \
 YYYY-MM-DD or ISO-8601.";
 
 /// The forwarded-header allow-list for HTTP mode: the token and the upstream URL.
@@ -233,7 +261,7 @@ pub struct ListProjectsArgs {}
 pub struct VikunjaServer {
     upstreams: Upstreams,
     local_token: Option<Arc<Token>>,
-    read_only: bool,
+    writable: bool,
     tool_router: ToolRouter<Self>,
 }
 
@@ -304,8 +332,8 @@ impl VikunjaServer {
         Self {
             upstreams,
             local_token: None,
-            read_only: false,
-            tool_router: Self::tool_router(),
+            writable: false,
+            tool_router: Self::router(false),
         }
     }
 
@@ -314,37 +342,38 @@ impl VikunjaServer {
         Self {
             upstreams: Upstreams::fixed(client),
             local_token: Some(Arc::new(token)),
-            read_only: false,
-            tool_router: Self::tool_router(),
+            writable: false,
+            tool_router: Self::router(false),
         }
     }
 
-    /// With `on`, remove the write tools ([`WRITE_TOOLS`]) from the router: they are neither
-    /// listed nor callable.
-    pub fn read_only(mut self, on: bool) -> Self {
-        if on {
-            for name in WRITE_TOOLS {
-                self.tool_router.remove_route(name);
-            }
-        }
-        self.read_only = on;
+    /// With `on`, offer the write tools ([`WRITE_TOOLS`]) too. Off (the default) they are
+    /// neither listed nor callable.
+    pub fn writable(mut self, on: bool) -> Self {
+        self.tool_router = Self::router(on);
+        self.writable = on;
         self
     }
 
-    /// True when the write tools are removed.
-    pub fn is_read_only(&self) -> bool {
-        self.read_only
+    /// True when the write tools are offered.
+    pub fn is_writable(&self) -> bool {
+        self.writable
     }
 
-    /// The tools this server exposes, with or without the write tools.
-    pub fn tools(read_only: bool) -> Vec<rmcp::model::Tool> {
-        let mut router = Self::tool_router();
-        if read_only {
+    /// The tools a server exposes, with or without the write tools.
+    pub fn tools(writable: bool) -> Vec<rmcp::model::Tool> {
+        Self::router(writable).list_all()
+    }
+
+    /// The compacted tool router, without [`WRITE_TOOLS`] unless `writable`.
+    fn router(writable: bool) -> ToolRouter<Self> {
+        let mut router = Self::tool_router().compact_schemas();
+        if !writable {
             for name in WRITE_TOOLS {
                 router.remove_route(name);
             }
         }
-        router.list_all()
+        router
     }
 
     /// The token for this call: the forwarded header, else the stdio token.
@@ -765,10 +794,10 @@ impl ServerHandler for VikunjaServer {
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions(if self.read_only {
-                INSTRUCTIONS_READ_ONLY
-            } else {
+            .with_instructions(if self.writable {
                 INSTRUCTIONS
+            } else {
+                INSTRUCTIONS_READ_ONLY
             })
     }
 }
@@ -877,9 +906,9 @@ mod tests {
     }
 
     #[test]
-    fn exactly_six_tools() {
+    fn exactly_six_tools_when_writable() {
         assert_eq!(
-            names(&VikunjaServer::tools(false)),
+            names(&VikunjaServer::tools(true)),
             [
                 "comment",
                 "create_task",
@@ -892,13 +921,13 @@ mod tests {
     }
 
     #[test]
-    fn read_only_removes_the_write_tools() {
+    fn read_only_by_default() {
         assert_eq!(
-            names(&VikunjaServer::tools(true)),
+            names(&VikunjaServer::tools(false)),
             ["get_task", "list_projects", "list_tasks"]
         );
-        let server = VikunjaServer::http(Upstreams::new(None).unwrap()).read_only(true);
-        assert!(server.is_read_only());
+        let server = VikunjaServer::http(Upstreams::new(None).unwrap());
+        assert!(!server.is_writable());
         for name in WRITE_TOOLS {
             assert!(!server.tool_router.has_route(name), "{name}");
         }
@@ -906,8 +935,24 @@ mod tests {
             server.get_info().instructions.as_deref(),
             Some(INSTRUCTIONS_READ_ONLY)
         );
-        let rw = VikunjaServer::http(Upstreams::new(None).unwrap()).read_only(false);
-        assert_eq!(rw.tool_router.list_all().len(), 6);
+        let tools = server.tool_router.list_all();
+        emperor_mcp::testkit::assert_tools(&tools);
+        emperor_mcp::testkit::assert_read_only_default(&tools);
+        emperor_mcp::testkit::assert_compact_schemas(&tools);
+    }
+
+    #[test]
+    fn writable_adds_the_write_tools() {
+        let rw = VikunjaServer::http(Upstreams::new(None).unwrap()).writable(true);
+        assert!(rw.is_writable());
+        let tools = rw.tool_router.list_all();
+        assert_eq!(tools.len(), 6);
+        emperor_mcp::testkit::assert_tools(&tools);
+        emperor_mcp::testkit::assert_compact_schemas(&tools);
+        assert!(emperor_mcp::testkit::warnings(&tools).is_empty());
+        assert_eq!(rw.get_info().instructions.as_deref(), Some(INSTRUCTIONS));
+        let back = rw.writable(false);
+        assert_eq!(back.tool_router.list_all().len(), 3);
     }
 
     #[test]

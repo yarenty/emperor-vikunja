@@ -1,23 +1,23 @@
 # emperor-vikunja — AI agent notes
 
-**Crate**: `emperor-vikunja` · **Version**: 0.1.2 · **Licence**: MIT OR Apache-2.0 · **Rust**: 1.88 (edition 2024; `rust-version` matches the highest MSRV in the dependency graph, rmcp 3.8)
+**Crate**: `emperor-vikunja` · **Version**: 0.2.0 · **Licence**: MIT OR Apache-2.0 · **Rust**: 1.88 (edition 2024; `rust-version` matches the highest MSRV in the dependency graph, rmcp 3.8)
 
 ## Scope
 
-A **standalone MCP server for a Vikunja instance**, built on [`emperor-mcp`](https://github.com/yarenty/emperor-mcp) 0.3 (rmcp 3.8 underneath) and held to the Emperor Profile P1. Six tools, a thin hand-written REST client, a `doctor` subcommand. Nothing else: no caching, no background work, no state between calls.
+A **standalone MCP server for a Vikunja instance**, built on [`emperor-mcp`](https://github.com/yarenty/emperor-mcp) 0.4 (rmcp 3.8 underneath) and held to the Emperor Profile P1.1. Read-only by default (three tools); `--writable` adds the three write tools. Six tools, a thin hand-written REST client, a `doctor` subcommand. Nothing else: no caching, no background work, no state between calls.
 
 Layout (one package, lib + bin):
 
 - `src/client.rs` — `Vikunja` (base URL + `reqwest` pool, no credentials), `Upstreams` (the `X-Upstream-Url` instance or the `--base-url` default, one pool), `Session` (one borrowed `Token` for one tool call), the API shapes, `TaskQuery` (filter expression + the same filter applied locally), `sort_tasks`. Only the endpoints the tools use.
-- `src/server.rs` — `VikunjaServer`: the rmcp `#[tool_router]` with the six annotated tools, `read_only`, token and upstream lookup, credential rejection, project lookup by id or title, output framing and caps.
+- `src/server.rs` — `VikunjaServer`: the rmcp `#[tool_router]` with the six annotated tools (compacted), `writable`, `write_mode`, token and upstream lookup, credential rejection, project lookup by id or title, output framing and caps.
 - `src/text.rs` — Markdown → HTML (`pulldown-cmark`, raw HTML escaped) and HTML → text (`html2text`).
 - `src/dates.rs` — date arguments (`YYYY-MM-DD` or RFC 3339) and Vikunja's zero time (`0001-01-01T00:00:00Z` = unset).
 - `src/doctor.rs` — the `doctor` checks, built on `emperor_mcp::doctor`.
-- `src/main.rs` — clap CLI: `serve`, `doctor`; `--base-url`, `--read-only` (or `VIKUNJA_READ_ONLY`) and emperor-mcp's shared `cli::ServeArgs` (`--bind`, `--stdio`, `--allowed-host`, `--allowed-origin`).
+- `src/main.rs` — clap CLI: `serve`, `doctor`; `--base-url`, `--writable` (or `VIKUNJA_WRITABLE`), the deprecated `--read-only` (or `VIKUNJA_READ_ONLY`) and emperor-mcp's shared `cli::ServeArgs` (`--bind`, `--stdio`, `--allowed-host`, `--allowed-origin`).
 - `tests/common/` — the fake Vikunja (axum, canned v2.x-shaped JSON, every request recorded, real pagination) and MCP-over-HTTP helpers.
-- `tests/client.rs`, `tests/mcp_http.rs`, `tests/stdio.rs` — client against the fake; the server end to end over stateless HTTP through `emperor_mcp::serve` (annotations checked with `emperor_mcp::testkit` on a live `tools/list`, read-only mode, 401/403, `X-Upstream-Url`, labels, assignees, caps); the real binary over stdio and `doctor`.
-- `tests/live_vikunja.rs` — `#[ignore]`: every tool against a `vikunja/vikunja` container (CI job `live-vikunja`).
-- `.github/workflows/docker.yml` — builds the image on amd64 and arm64 and speaks MCP to it over stdio against a `vikunja/vikunja` container (6 tools, 3 with `VIKUNJA_READ_ONLY=true`).
+- `tests/client.rs`, `tests/mcp_http.rs`, `tests/stdio.rs` — client against the fake; the server end to end over stateless HTTP through `emperor_mcp::serve` (annotations, read-only default and compact schemas checked with `emperor_mcp::testkit` on a live `tools/list`, 401/403, `X-Upstream-Url`, labels, assignees, caps); the real binary over stdio and `doctor` (default 3 tools, `--writable` 6, `--read-only` a logged no-op, both switches refused).
+- `tests/live_vikunja.rs` — `#[ignore]`: the default lists 3 tools; every tool, with writing on, against a `vikunja/vikunja` container (CI job `live-vikunja`).
+- `.github/workflows/docker.yml` — builds the image on amd64 and arm64 and speaks MCP to it over stdio against a `vikunja/vikunja` container (3 tools by default, 6 with `VIKUNJA_WRITABLE=true`, 3 with the deprecated `VIKUNJA_READ_ONLY=true`, and both switches refused).
 
 ## Before you change code
 
@@ -27,9 +27,10 @@ Layout (one package, lib + bin):
 
 ## Conventions
 
-- **Six tools, three to eight ever.** A seventh tool needs a reason; past eight the server is split by noun (MCP_REQUIREMENTS §11). New abilities go in as arguments (labels and assignees are arguments of `create_task` / `update_task`). `doctor` counts the real router, and `server::tests::exactly_six_tools` pins the names.
+- **Six tools, three to eight ever.** A seventh tool needs a reason; past eight the server is split by noun (MCP_REQUIREMENTS §11). New abilities go in as arguments (labels and assignees are arguments of `create_task` / `update_task`). `doctor` counts the real router, and `server::tests::exactly_six_tools_when_writable` pins the names.
 - **Annotations on every tool, accurate.** Read tools `read_only_hint = true`; `create_task` and `comment` add things (not destructive, not idempotent); `update_task` is destructive (it replaces title and description, removes labels and assignees) and idempotent (absolute values, add-if-missing, remove-if-present). All open-world. The reasoning lives in the `server` module docs; `tests/mcp_http.rs` pins every hint and runs `emperor_mcp::testkit` on the served `tools/list`. Keep the tool doc comments user-facing: they are the tool descriptions, so justifications go in `//` comments.
-- **`--read-only` removes, never refuses.** `VikunjaServer::read_only(true)` takes `WRITE_TOOLS` out of the router at construction, so they are neither listed nor callable; `doctor` and the startup log print the mode. `VIKUNJA_READ_ONLY` sets the same switch for launchers that only pass env vars (clap `FalseyValueParser`: unset, empty, `false`, `0`, `no` = off). A new write tool goes into `WRITE_TOOLS`.
+- **Read-only by default; writing is switched on (E11).** `VikunjaServer::http` / `local` build the router without `WRITE_TOOLS`, so they are neither listed nor callable; `.writable(true)` (`--writable` or `VIKUNJA_WRITABLE`, read with `emperor_mcp::cli::parse_switch`: unset, empty, `false`, `0`, `no`, `off` = off; an unknown value stops start-up) adds them. `doctor` and the startup log print the mode. A new write tool goes into `WRITE_TOOLS`. `--read-only` / `VIKUNJA_READ_ONLY` is kept only so old configurations start: it changes nothing and logs `READ_ONLY_DEPRECATED`; with `--writable` too, `server::write_mode` refuses to start. `testkit::assert_read_only_default` guards the default.
+- **Lean definitions (E12).** The router goes through `.compact_schemas()`; tests run `testkit::assert_compact_schemas` and expect no `testkit::warnings` (descriptions stay under 300 characters).
 - **Vikunja 401/403 is a credential rejection.** `server::upstream` maps `Error::Unauthorized` to `emperor_mcp::credentials_rejected`, so the MCP HTTP response is `401`/`403` and the client can re-authenticate; every other upstream failure stays a tool error. A missing token is checked before any call and stays a tool error.
 - **Upstream per request.** `X-Upstream-Url` (in `server::forward_config` with `Authorization`) names the instance for one call and wins over `--base-url`; `Upstreams::resolve` accepts `https`, or `http` only for a loopback host. Without either the tool answers with what to send; nothing reaches the network.
 - **Resolve names before writing.** Project, assignees (`GET /users?s=`, exact username) and labels are resolved before the first write, so a bad name leaves nothing behind. Missing labels are created only with `create_missing_labels: true`.

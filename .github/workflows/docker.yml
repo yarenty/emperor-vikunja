@@ -104,8 +104,23 @@ jobs:
             jq -se 'map(select(.id == 3))[0].result
                     | (.isError // false) == false and (.content | length) > 0' out.jsonl
           }
-          smoke 6
+          # default: read-only, the three read tools
+          smoke 3
+          # writing switched on: all six tools
+          smoke 6 -e VIKUNJA_WRITABLE=true
+          # the old switch is accepted and changes nothing
           smoke 3 -e VIKUNJA_READ_ONLY=true
+          grep -q deprecated err.log
+
+      - name: Both switches are refused
+        run: |
+          if docker run -i --rm --network mcp -e VIKUNJA_URL=http://vikunja:3456 -e VIKUNJA_TOKEN \
+               -e VIKUNJA_WRITABLE=true -e VIKUNJA_READ_ONLY=true emperor-vikunja:ci \
+               < /dev/null > out.jsonl 2> err.log; then
+            echo "started with both switches"; exit 1
+          fi
+          cat err.log
+          grep -q "are both on" err.log
 
       - name: Clean up
         if: always()

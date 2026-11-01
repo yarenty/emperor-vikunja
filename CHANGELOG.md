@@ -4,6 +4,22 @@ All notable changes to emperor-vikunja. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-01
+
+> Read-only by default: writing is switched on by the operator. Built on emperor-mcp 0.4 (Emperor Profile P1.1).
+
+### Changed (breaking)
+- **Read-only by default; pass `--writable`.** Started without a switch, the server lists and serves only `list_tasks`, `get_task` and `list_projects`. `--writable` (or `VIKUNJA_WRITABLE=true`) adds `create_task`, `update_task` and `comment`. Without it the write tools are not in the server at all, so neither the model nor text it reads can reach them.
+- **`--read-only` / `VIKUNJA_READ_ONLY` is deprecated and does nothing**, since read-only is now the default. It is still accepted so existing configurations start, and a one-line note is logged (and shown by `doctor`). Given together with `--writable`, the server refuses to start with an error naming both.
+- **Switch values are strict.** `VIKUNJA_WRITABLE` and `VIKUNJA_READ_ONLY` accept `true`, `1`, `yes`, `on` (on) and unset, empty, `false`, `0`, `no`, `off` (off); any other value stops the server at start-up instead of being guessed.
+
+**Upgrading from 0.1.x:** if the assistant should create, update or comment, add `--writable` to the command (or set `VIKUNJA_WRITABLE=true`, e.g. `-e VIKUNJA_WRITABLE=true` for the container). If you ran with `--read-only` or `VIKUNJA_READ_ONLY=true`, nothing changes; remove the switch when convenient. Run `emperor-vikunja doctor` to see the mode the server will start in.
+
+### Changed
+- **emperor-mcp 0.4** - compact tool input schemas (no `$schema`, no `null` alternatives on optional arguments, no integer formats): `tools/list` is smaller on every request.
+- **`doctor` and the startup log** say `read-only` or `writable`; read-only names the switch that adds the write tools.
+- **MCP Registry metadata** - `--writable` is the optional positional argument and `VIKUNJA_WRITABLE` the optional environment variable; `--read-only` and `VIKUNJA_READ_ONLY` are no longer listed.
+
 ## [0.1.2] - 2026-11-01
 
 ### Added

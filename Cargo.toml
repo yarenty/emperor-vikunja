@@ -1,6 +1,6 @@
 [package]
 name = "emperor-vikunja"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "MCP server for Vikunja: list, read, create and update tasks, comment, list projects; built on emperor-mcp"
@@ -22,7 +22,7 @@ name = "emperor-vikunja"
 path = "src/main.rs"
 
 [dependencies]
-emperor-mcp = { version = "0.3", features = ["cli"] }
+emperor-mcp = { version = "0.4", features = ["cli"] }
 rmcp = { version = "3.8", features = ["server", "macros", "transport-io"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "query"] }
@@ -39,4 +39,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 axum = "0.8"
-emperor-mcp = { version = "0.3", features = ["cli", "testkit"] }
+emperor-mcp = { version = "0.4", features = ["cli", "testkit"] }

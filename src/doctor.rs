@@ -5,7 +5,9 @@ use std::net::SocketAddr;
 use emperor_mcp::doctor::{Check, Report, env_set, port_free, tool_budget};
 
 use crate::client::{Token, Vikunja};
-use crate::server::{TOKEN_ENV, UPSTREAM_URL_HEADER, VikunjaServer};
+use crate::server::{
+    READ_ONLY_DEPRECATED, TOKEN_ENV, UPSTREAM_URL_HEADER, VikunjaServer, WRITE_TOOLS,
+};
 
 /// What `doctor` checks: the same flags `serve` takes.
 #[derive(Debug, Clone, Copy)]
@@ -16,8 +18,10 @@ pub struct Setup<'a> {
     pub bind: SocketAddr,
     /// stdio mode: skips the listen-address check, makes the URL and the token mandatory.
     pub stdio: bool,
-    /// `--read-only`: only the read tools are served.
-    pub read_only: bool,
+    /// `--writable` / `VIKUNJA_WRITABLE`: the write tools are served too.
+    pub writable: bool,
+    /// `--read-only` / `VIKUNJA_READ_ONLY` was given: deprecated, read-only is the default.
+    pub read_only_given: bool,
 }
 
 /// Run every check.
@@ -90,16 +94,23 @@ pub async fn run(setup: &Setup<'_>) -> Report {
         });
     }
 
-    let tools = VikunjaServer::tools(setup.read_only);
+    let tools = VikunjaServer::tools(setup.writable);
     let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
     report.push(Check::pass(
         "mode",
-        if setup.read_only {
-            format!("read-only: {} (write tools removed)", names.join(", "))
+        if setup.writable {
+            format!("writable: {}", names.join(", "))
         } else {
-            format!("read-write: {}", names.join(", "))
+            format!(
+                "read-only: {} (pass --writable or VIKUNJA_WRITABLE=true for {})",
+                names.join(", "),
+                WRITE_TOOLS.join(", ")
+            )
         },
     ));
+    if setup.read_only_given {
+        report.push(Check::warn("--read-only", READ_ONLY_DEPRECATED));
+    }
     if !stdio {
         report.push(port_free(setup.bind));
     }

@@ -3,7 +3,8 @@
 #   docker build -t emperor-vikunja .
 #   docker run -i --rm -e VIKUNJA_URL=https://vikunja.example.com -e VIKUNJA_TOKEN=... emperor-vikunja
 #
-# Serve only the read tools with -e VIKUNJA_READ_ONLY=true (or --read-only after the image name).
+# Read-only by default (list_tasks, get_task, list_projects). Add the write tools with
+# -e VIKUNJA_WRITABLE=true (or --writable after the image name).
 
 FROM rust:1.88-slim-bookworm AS build
 WORKDIR /src
@@ -23,6 +24,6 @@ RUN apt-get update \
     && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin emperor
 COPY --from=build /src/target/release/emperor-vikunja /usr/local/bin/emperor-vikunja
 USER 10001
-# The Vikunja address comes from VIKUNJA_URL, the token from VIKUNJA_TOKEN, read-only mode
-# from VIKUNJA_READ_ONLY.
+# The Vikunja address comes from VIKUNJA_URL, the token from VIKUNJA_TOKEN, the write switch
+# from VIKUNJA_WRITABLE.
 ENTRYPOINT ["emperor-vikunja", "serve", "--stdio"]
