@@ -3,13 +3,17 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use clap::{Args, Parser, Subcommand};
+use clap::builder::FalseyValueParser;
+use clap::{ArgAction, Args, Parser, Subcommand};
 use emperor_mcp::cli::ServeArgs;
 use emperor_mcp::serve;
 use emperor_vikunja::client::Upstreams;
 use emperor_vikunja::server::{TOKEN_ENV, forward_config};
 use emperor_vikunja::{Token, Vikunja, VikunjaServer, doctor, init_tracing};
 use rmcp::ServiceExt;
+
+/// Environment variable that switches on `--read-only` (for launchers that set only env vars).
+const READ_ONLY_ENV: &str = "VIKUNJA_READ_ONLY";
 
 /// Where the HTTP server listens when `--bind` is not given.
 const DEFAULT_BIND: SocketAddr =
@@ -41,8 +45,14 @@ struct Common {
     /// request can name its instance in the X-Upstream-Url header instead.
     #[arg(long, env = "VIKUNJA_URL")]
     base_url: Option<String>,
-    /// Serve only the read tools (list_tasks, get_task, list_projects).
-    #[arg(long)]
+    /// Serve only the read tools (list_tasks, get_task, list_projects). From the environment:
+    /// `true`, `1` or `yes` turns it on; unset, empty, `false`, `0` or `no` leaves it off.
+    #[arg(
+        long,
+        env = READ_ONLY_ENV,
+        action = ArgAction::SetTrue,
+        value_parser = FalseyValueParser::new()
+    )]
     read_only: bool,
     #[command(flatten)]
     serve: ServeArgs,
@@ -112,5 +122,55 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read_only(args: &[&str]) -> bool {
+        let cli = Cli::try_parse_from(
+            ["emperor-vikunja", "serve", "--stdio"]
+                .iter()
+                .chain(args)
+                .copied(),
+        )
+        .unwrap();
+        match cli.command {
+            Command::Serve(c) | Command::Doctor(c) => c.read_only,
+        }
+    }
+
+    // One test: it changes the process environment, so nothing may run beside it.
+    #[test]
+    fn read_only_from_flag_and_environment() {
+        let set = |v: Option<&str>| {
+            // SAFETY: the only test in this binary that touches the environment, and
+            // no other thread reads it while this test runs.
+            unsafe {
+                match v {
+                    Some(v) => std::env::set_var(READ_ONLY_ENV, v),
+                    None => std::env::remove_var(READ_ONLY_ENV),
+                }
+            }
+        };
+        set(None);
+        assert!(!read_only(&[]));
+        assert!(read_only(&["--read-only"]));
+        for off in ["", "false", "FALSE", "0", "no", "off"] {
+            set(Some(off));
+            assert!(!read_only(&[]), "{off:?} must leave read-only off");
+        }
+        for on in ["true", "True", "1", "yes"] {
+            set(Some(on));
+            assert!(read_only(&[]), "{on:?} must turn read-only on");
+        }
+        set(Some("false"));
+        assert!(
+            read_only(&["--read-only"]),
+            "the flag wins over a false env"
+        );
+        set(None);
     }
 }

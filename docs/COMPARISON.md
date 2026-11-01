@@ -1,6 +1,6 @@
 # emperor-vikunja next to other task-manager MCP servers
 
-How emperor-vikunja 0.1.1 compares with the public MCP servers for
+How emperor-vikunja 0.1.2 compares with the public MCP servers for
 [Vikunja](https://vikunja.io), with Todoist's and Linear's own servers for reference. For the
 shared background (the 2026-07-28 spec revision, annotations, the "lethal trifecta") and what
 every emperor server gets from the framework, see
@@ -21,7 +21,7 @@ server keep your token.
 
 | Server | Stars | Last release | Language | Tools | Gating | Activity |
 |---|---|---|---|---|---|---|
-| **emperor-vikunja** | new | 0.1.1, 2026-11-01 | Rust | 6 (3 with `--read-only`) | `--read-only` removes the write tools; no delete tool | Live test against Vikunja 2.7.1; API v1 paths |
+| **emperor-vikunja** | new | 0.1.2, 2026-11-01 | Rust | 6 (3 with `--read-only`) | `--read-only` removes the write tools; no delete tool | Live test against Vikunja 2.7.1; API v1 paths |
 | [democratize-technology/vikunja-mcp](https://github.com/democratize-technology/vikunja-mcp) | 114 | v0.2.0, 2025-08-16 | TypeScript | 13 multiplexed (each with many sub-commands) | None; no annotations; bulk delete without confirmation | Last commit 2026-02-15, 40 open pull requests |
 | [aimbitgmbh/vikunja-mcp](https://github.com/aimbitgmbh/vikunja-mcp) | 12 | v1.1.0, 2026-10-30 | TypeScript | 52 | Deletes off by default, one switch per resource | Vikunja 2.6+ on API v2 only |
 | [Doist/todoist-mcp](https://github.com/Doist/todoist-mcp) (Todoist) | 562 | v13.8.2, 2026-10-31 | TypeScript | about 45, not re-counted | Annotations, with a test that checks them | Very active, by the vendor |

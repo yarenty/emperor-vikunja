@@ -4,6 +4,15 @@ All notable changes to emperor-vikunja. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-01
+
+### Added
+- **`VIKUNJA_READ_ONLY`** - read-only mode can be switched on from the environment (`true`, `1` or `yes`; unset, empty, `false`, `0` or `no` leave it off), for launchers that only set environment variables, such as the Docker MCP Catalog. The startup log and `doctor` show the mode.
+- **Container image checked on amd64 and arm64** - the image is built natively on both architectures and spoken to over stdio against a real Vikunja.
+
+### Changed
+- **MCP Registry metadata** - `serve`, `--stdio` and `--read-only` are fixed positional arguments; `VIKUNJA_READ_ONLY` is listed as an optional environment variable.
+
 ## [0.1.1] - 2026-11-01
 
 ### Added
