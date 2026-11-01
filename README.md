@@ -230,6 +230,7 @@ cargo test --test live_vikunja -- --ignored --nocapture  # every tool against a 
 - Crate: [crates.io/crates/emperor-vikunja](https://crates.io/crates/emperor-vikunja), API docs on [docs.rs](https://docs.rs/emperor-vikunja)
 - Container: build from the [`Dockerfile`](Dockerfile); it serves stdio and reads `VIKUNJA_URL` and `VIKUNJA_TOKEN`
 - Listed in the official MCP Registry as mcp-name: io.github.yarenty/emperor-vikunja
+- How it compares with other task-manager MCP servers: [docs/COMPARISON.md](docs/COMPARISON.md)
 
 ## License
 
