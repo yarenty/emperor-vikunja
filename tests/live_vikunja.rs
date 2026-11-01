@@ -6,7 +6,9 @@
 //!
 //! Starts a throwaway `vikunja/vikunja` container (override the image with
 //! `EMPEROR_VIKUNJA_IMAGE`), registers a user with a random password, creates an API token
-//! with the permissions the README lists, and drives the six tools through the MCP HTTP server, with and without `X-Upstream-Url`.
+//! with the permissions the README lists, checks that a default server lists only the three
+//! read tools, and drives the six tools through a server started with `--writable`, with and
+//! without `X-Upstream-Url`.
 //! The container is removed afterwards. Skipped when `docker info` fails.
 
 mod common;
@@ -155,11 +157,38 @@ async fn all_tools_against_real_vikunja() {
         .unwrap();
     let work_id = work["id"].as_i64().unwrap();
 
-    let mcp = start(&base).await;
-    let auth = format!("Bearer {token}");
-    let auth = Some(auth.as_str());
+    let bearer = format!("Bearer {token}");
+    let auth = Some(bearer.as_str());
 
-    // tools/list from the running server holds to the emperor-mcp rules
+    // default: read-only, three tools, and a write is not served
+    let ro = start_with(Some(&base), false).await;
+    let list = rpc(
+        &ro,
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        None,
+    )
+    .await;
+    emperor_mcp::testkit::assert_tools_json(&list);
+    emperor_mcp::testkit::assert_read_only_default_json(&list);
+    emperor_mcp::testkit::assert_compact_schemas_json(&list);
+    assert_eq!(
+        list["result"]["tools"].as_array().unwrap().len(),
+        3,
+        "{list}"
+    );
+    let (_, _, v) = rpc_raw(
+        &ro,
+        tool_call("create_task", json!({ "project": "Work", "title": "nope" })),
+        &[("Authorization", &bearer)],
+    )
+    .await;
+    assert!(
+        v.get("error").is_some() || v["result"]["isError"] == true,
+        "create_task must not run without --writable: {v}"
+    );
+
+    // --writable: six tools; tools/list from the running server holds to the emperor-mcp rules
+    let mcp = start(&base).await;
     let list = rpc(
         &mcp,
         json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
@@ -167,6 +196,12 @@ async fn all_tools_against_real_vikunja() {
     )
     .await;
     emperor_mcp::testkit::assert_tools_json(&list);
+    emperor_mcp::testkit::assert_compact_schemas_json(&list);
+    assert_eq!(
+        list["result"]["tools"].as_array().unwrap().len(),
+        6,
+        "{list}"
+    );
 
     // list_projects
     let projects = call(&mcp, auth, "list_projects", json!({})).await;
@@ -346,7 +381,7 @@ async fn all_tools_against_real_vikunja() {
 
     // doctor, as an operator would run it
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_emperor-vikunja"))
-        .args(["doctor", "--base-url", &base, "--stdio"])
+        .args(["doctor", "--base-url", &base, "--stdio", "--writable"])
         .env("VIKUNJA_TOKEN", &token)
         .output()
         .unwrap();

@@ -44,12 +44,12 @@ config:
         ui:
           label: Vikunja URL
           hint: Default Vikunja instance, e.g. https://vikunja.example.com (flag --base-url or env VIKUNJA_URL). Optional over HTTP when clients send X-Upstream-Url.
-      read_only:
+      writable:
         type: boolean
         default: false
         ui:
-          label: Read-only
-          hint: Serve only list_tasks, get_task and list_projects (flag --read-only).
+          label: Allow changes
+          hint: Also serve create_task, update_task and comment (flag --writable or env VIKUNJA_WRITABLE). Off, the server is read-only.
       bind:
         type: string
         default: 127.0.0.1:8034

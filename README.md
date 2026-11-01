@@ -7,7 +7,7 @@
 kowalski or any MCP client list, read, create and update your tasks, comment on them and see
 your projects.
 
-Built on [emperor-mcp](https://github.com/yarenty/emperor-mcp) (Emperor Profile P1):
+Built on [emperor-mcp](https://github.com/yarenty/emperor-mcp) (Emperor Profile P1.1):
 
 - **Stateless Streamable HTTP** at `/mcp`, plus stdio for desktop clients.
 - **Your token is forwarded, never stored.** Over HTTP each request brings its own
@@ -15,21 +15,26 @@ Built on [emperor-mcp](https://github.com/yarenty/emperor-mcp) (Emperor Profile 
   default or test tokens.
 - **Framed output.** Task text written by people (titles, descriptions, comments) reaches the
   model marked as messages for the user, never as instructions for the model.
-- **Six annotated tools**, a `--read-only` mode, a `doctor` subcommand, Markdown in and plain
-  text out.
+- **Read-only unless you say otherwise.** Started plain, the server offers only the three read
+  tools; `--writable` (or `VIKUNJA_WRITABLE=true`) adds the three that change tasks.
+- **Six annotated tools** with compact definitions, a `doctor` subcommand, Markdown in and
+  plain text out.
 - **Clear auth failures.** When Vikunja refuses the token, the MCP response over HTTP is a `401`
   or `403`, so the client can ask for a new token.
 
 ## Tools
 
-| Tool | Annotations | What it does |
-|---|---|---|
-| `list_tasks` | read-only | Tasks sorted by priority, then due date. Filters: `project` (title or id), `label`, `done` (default `false`), `due_before`, `search`; `limit` up to 100 (default 50). Returns id, title, project, labels, assignees, priority, due, done. |
-| `get_task` | read-only | One task by `id`: every field, the description as plain text (first 20 000 characters), and the 50 most recent comments with author and date (4 000 characters each). |
-| `create_task` | write, not idempotent | `project`, `title`, optional `description` (Markdown), `labels`, `create_missing_labels`, `assignees` (usernames), `priority` 0-5, `due`. |
-| `update_task` | write, destructive, idempotent | `id` plus any of `title`, `description`, `done`, `priority`, `due` (`"none"` clears it), `add_labels`, `remove_labels`, `create_missing_labels`, `add_assignees`, `remove_assignees`, `project` (move). |
-| `comment` | write, not idempotent | Add a Markdown comment to task `id`. |
-| `list_projects` | read-only | Projects (up to 100) with id, title, parent and number of open tasks. |
+| Tool | Listed | Annotations | What it does |
+|---|---|---|---|
+| `list_tasks` | always | read-only | Tasks sorted by priority, then due date. Filters: `project` (title or id), `label`, `done` (default `false`), `due_before`, `search`; `limit` up to 100 (default 50). Returns id, title, project, labels, assignees, priority, due, done. |
+| `get_task` | always | read-only | One task by `id`: every field, the description as plain text (first 20 000 characters), and the 50 most recent comments with author and date (4 000 characters each). |
+| `create_task` | with `--writable` | write, not idempotent | `project`, `title`, optional `description` (Markdown), `labels`, `create_missing_labels`, `assignees` (usernames), `priority` 0-5, `due`. |
+| `update_task` | with `--writable` | write, destructive, idempotent | `id` plus any of `title`, `description`, `done`, `priority`, `due` (`"none"` clears it), `add_labels`, `remove_labels`, `create_missing_labels`, `add_assignees`, `remove_assignees`, `project` (move). |
+| `comment` | with `--writable` | write, not idempotent | Add a Markdown comment to task `id`. |
+| `list_projects` | always | read-only | Projects (up to 100) with id, title, parent and number of open tasks. |
+
+Without `--writable` the write tools are not in the server at all: they are neither listed nor
+callable, so neither the model nor text it reads can reach them.
 
 Every tool is marked open-world (it talks to a Vikunja that other people change).
 `update_task` is marked destructive because a new title or description replaces the old text,
@@ -63,7 +68,7 @@ cargo install --git https://github.com/yarenty/emperor-vikunja
 ## Get a token
 
 In Vikunja open **Settings > API Tokens > Create a token**, pick an expiry date and tick these
-permissions (the minimum the six tools need):
+permissions (the minimum the six tools need with `--writable`):
 
 | Group | Permissions |
 |---|---|
@@ -75,8 +80,8 @@ permissions (the minimum the six tools need):
 | labels | `read_all`, `create` (`create` only for `create_missing_labels`) |
 | other | `user` (lets `doctor` show whose token it is), `users` (assignees by username) |
 
-For a read-only assistant start the server with `--read-only` and give it a token with only the
-`read_all` / `read_one` permissions.
+The server is read-only by default; for a read-only assistant give it a token with only the
+`read_all` / `read_one` permissions (and `other: user` for `doctor`).
 
 ## Run
 
@@ -84,7 +89,8 @@ For a read-only assistant start the server with `--read-only` and give it a toke
 
 ```bash
 export VIKUNJA_TOKEN=...            # from Settings > API Tokens
-emperor-vikunja serve --stdio --base-url https://vikunja.example.com
+emperor-vikunja serve --stdio --base-url https://vikunja.example.com              # read-only
+emperor-vikunja serve --stdio --base-url https://vikunja.example.com --writable   # also create, update, comment
 ```
 
 ### Docker (stdio)
@@ -92,7 +98,8 @@ emperor-vikunja serve --stdio --base-url https://vikunja.example.com
 ```bash
 docker build -t emperor-vikunja https://github.com/yarenty/emperor-vikunja.git
 docker run -i --rm -e VIKUNJA_URL=https://vikunja.example.com -e VIKUNJA_TOKEN emperor-vikunja
-# read-only: add -e VIKUNJA_READ_ONLY=true (or --read-only after the image name)
+# read-only by default; to create, update and comment add -e VIKUNJA_WRITABLE=true
+# (or --writable after the image name)
 ```
 
 The image runs `emperor-vikunja serve --stdio` as a non-root user; the Vikunja address comes
@@ -101,7 +108,8 @@ from `VIKUNJA_URL`.
 ### Shared (HTTP)
 
 ```bash
-emperor-vikunja serve --base-url https://vikunja.example.com --bind 127.0.0.1:8034
+# --writable: the users of this server may create, update and comment; leave it out for read-only
+emperor-vikunja serve --base-url https://vikunja.example.com --bind 127.0.0.1:8034 --writable
 # MCP endpoint: http://127.0.0.1:8034/mcp   liveness: http://127.0.0.1:8034/health
 ```
 
@@ -119,7 +127,8 @@ JSON-RPC error.
 | Flag | Env | Meaning |
 |---|---|---|
 | `--base-url <URL>` | `VIKUNJA_URL` | Vikunja address; `https://host` and `https://host/api/v1` both work. Required with `--stdio`; optional over HTTP when requests send `X-Upstream-Url`. |
-| `--read-only` | `VIKUNJA_READ_ONLY` | Serve only `list_tasks`, `get_task` and `list_projects`. The write tools are removed from the server, not just refused. From the environment `true`, `1` or `yes` turns it on; unset, empty, `false`, `0` or `no` leaves it off. |
+| `--writable` | `VIKUNJA_WRITABLE` | Also serve `create_task`, `update_task` and `comment`. Without it the server is read-only: the write tools are not in the server, not just refused. From the environment `true`, `1`, `yes` or `on` turns it on; unset, empty, `false`, `0`, `no` or `off` leaves it off; anything else stops the server at start-up. |
+| `--read-only` | `VIKUNJA_READ_ONLY` | Deprecated, no effect: read-only is the default. Still accepted so existing configurations start; a one-line note is logged. Given together with `--writable`, the server refuses to start. |
 | `--stdio` | | Speak MCP over stdin/stdout; the token comes from `VIKUNJA_TOKEN`. |
 | `--bind <ADDR>` | | HTTP listen address (default `127.0.0.1:8034`). |
 | `--allowed-host <HOST>` | | Accept only this `Host` header (repeatable); off by default, for a validating proxy in front. |
@@ -141,12 +150,14 @@ reverse proxy that terminates TLS (Emperor Profile E5).
 
 **Claude Desktop** (`claude_desktop_config.json`):
 
+`--writable` lets Claude create, update and comment; drop it for a read-only connection.
+
 ```json
 {
   "mcpServers": {
     "vikunja": {
       "command": "emperor-vikunja",
-      "args": ["serve", "--stdio", "--base-url", "https://vikunja.example.com"],
+      "args": ["serve", "--stdio", "--base-url", "https://vikunja.example.com", "--writable"],
       "env": { "VIKUNJA_TOKEN": "<your token>" }
     }
   }
@@ -156,13 +167,13 @@ reverse proxy that terminates TLS (Emperor Profile E5).
 **Claude Code**:
 
 ```bash
-# stdio
-claude mcp add vikunja --env VIKUNJA_TOKEN=<your token> -- \
-  emperor-vikunja serve --stdio --base-url https://vikunja.example.com
-# read-only
+# stdio, read-only (the default)
 claude mcp add vikunja-ro --env VIKUNJA_TOKEN=<your token> -- \
-  emperor-vikunja serve --stdio --read-only --base-url https://vikunja.example.com
-# or against a running HTTP server
+  emperor-vikunja serve --stdio --base-url https://vikunja.example.com
+# stdio, --writable: Claude may also create, update and comment
+claude mcp add vikunja --env VIKUNJA_TOKEN=<your token> -- \
+  emperor-vikunja serve --stdio --base-url https://vikunja.example.com --writable
+# or against a running HTTP server (its own --writable decides what is listed)
 claude mcp add --transport http vikunja http://127.0.0.1:8034/mcp \
   --header "Authorization: Bearer <your token>" \
   --header "X-Upstream-Url: https://vikunja.example.com"
@@ -174,10 +185,11 @@ claude mcp add --transport http vikunja http://127.0.0.1:8034/mcp \
 [[mcp.servers]]
 name = "vikunja"
 transport = "stdio"
-command = ["emperor-vikunja", "serve", "--stdio", "--base-url", "https://vikunja.example.com"]
+# --writable: the agent may create, update and comment; drop it for read-only.
+command = ["emperor-vikunja", "serve", "--stdio", "--base-url", "https://vikunja.example.com", "--writable"]
 # VIKUNJA_TOKEN is read from kowalski's environment.
 
-# or over HTTP
+# or over HTTP (the server's own --writable decides what is listed)
 [[mcp.servers]]
 name = "vikunja-http"
 transport = "http"
@@ -192,20 +204,20 @@ something is broken, so scripts and container health checks can use it:
 
 ```text
 $ VIKUNJA_TOKEN=... emperor-vikunja doctor --base-url https://vikunja.example.com
-emperor-vikunja 0.1.2 doctor
+emperor-vikunja 0.2.0 doctor
   [ok  ] base url        https://vikunja.example.com/
   [ok  ] vikunja api     Vikunja v2.7.1
   [ok  ] VIKUNJA_TOKEN   set (43 chars)
   [ok  ] vikunja login   token works for user alice
-  [ok  ] mode            read-write: comment, create_task, get_task, list_projects, list_tasks, update_task
+  [ok  ] mode            read-only: get_task, list_projects, list_tasks (pass --writable or VIKUNJA_WRITABLE=true for create_task, update_task, comment)
   [ok  ] listen address  127.0.0.1:8034 is free
-  [ok  ] tool budget     6 of at most 8 tools
+  [ok  ] tool budget     3 of at most 8 tools
 all good (0 warning(s))
 ```
 
 It checks that the URL parses, `GET /api/v1/info` answers, the token is set (only its length is
-shown) and `GET /api/v1/user` accepts it, which tools the mode serves (`--read-only` lists the
-three read tools), the listen address is free (skipped with `--stdio`), and the tool count is
+shown) and `GET /api/v1/user` accepts it, which tools the mode serves (three read tools by default,
+all six with `--writable`; a warning when the deprecated `--read-only` is given), the listen address is free (skipped with `--stdio`), and the tool count is
 within the emperor-mcp budget. Without `VIKUNJA_TOKEN` in HTTP mode the token line is a
 warning, because the token comes per request; with `--stdio` it is a failure. The same goes for
 `--base-url`: over HTTP its absence is a warning (requests must send `X-Upstream-Url`), with
@@ -222,13 +234,13 @@ applied again locally so results stay right even where the server ignores part o
 
 ```bash
 cargo test                                               # unit, fake-Vikunja, MCP HTTP and stdio tests
-cargo test --test live_vikunja -- --ignored --nocapture  # every tool against a real Vikunja in Docker
+cargo test --test live_vikunja -- --ignored --nocapture  # default and --writable against a real Vikunja in Docker
 ```
 
 ## Links
 
 - Crate: [crates.io/crates/emperor-vikunja](https://crates.io/crates/emperor-vikunja), API docs on [docs.rs](https://docs.rs/emperor-vikunja)
-- Container: build from the [`Dockerfile`](Dockerfile); it serves stdio and reads `VIKUNJA_URL`, `VIKUNJA_TOKEN` and `VIKUNJA_READ_ONLY`
+- Container: build from the [`Dockerfile`](Dockerfile); it serves stdio and reads `VIKUNJA_URL`, `VIKUNJA_TOKEN` and `VIKUNJA_WRITABLE`
 - Listed in the official MCP Registry as mcp-name: io.github.yarenty/emperor-vikunja
 - How it compares with other task-manager MCP servers: [docs/COMPARISON.md](docs/COMPARISON.md)
 

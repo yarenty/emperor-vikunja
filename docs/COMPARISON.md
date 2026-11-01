@@ -1,6 +1,6 @@
 # emperor-vikunja next to other task-manager MCP servers
 
-How emperor-vikunja 0.1.2 compares with the public MCP servers for
+How emperor-vikunja 0.2.0 compares with the public MCP servers for
 [Vikunja](https://vikunja.io), with Todoist's and Linear's own servers for reference. For the
 shared background (the 2026-07-28 spec revision, annotations, the "lethal trifecta") and what
 every emperor server gets from the framework, see
@@ -21,7 +21,7 @@ server keep your token.
 
 | Server | Stars | Last release | Language | Tools | Gating | Activity |
 |---|---|---|---|---|---|---|
-| **emperor-vikunja** | new | 0.1.2, 2026-11-01 | Rust | 6 (3 with `--read-only`) | `--read-only` removes the write tools; no delete tool | Live test against Vikunja 2.7.1; API v1 paths |
+| **emperor-vikunja** | new | 0.2.0, 2026-11-01 | Rust | 3 read-only by default, 6 with `--writable` | Write tools only with `--writable`; no delete tool | Live test against Vikunja 2.7.1; API v1 paths |
 | [democratize-technology/vikunja-mcp](https://github.com/democratize-technology/vikunja-mcp) | 114 | v0.2.0, 2025-08-16 | TypeScript | 13 multiplexed (each with many sub-commands) | None; no annotations; bulk delete without confirmation | Last commit 2026-02-15, 40 open pull requests |
 | [aimbitgmbh/vikunja-mcp](https://github.com/aimbitgmbh/vikunja-mcp) | 12 | v1.1.0, 2026-10-30 | TypeScript | 52 | Deletes off by default, one switch per resource | Vikunja 2.6+ on API v2 only |
 | [Doist/todoist-mcp](https://github.com/Doist/todoist-mcp) (Todoist) | 562 | v13.8.2, 2026-10-31 | TypeScript | about 45, not re-counted | Annotations, with a test that checks them | Very active, by the vendor |
@@ -35,8 +35,9 @@ language inside the tool. emperor-vikunja avoids this on purpose: one tool, one 
 ## emperor-vikunja: pros
 
 - **Small and clear**: 6 tools, each a verb, and no delete tool at all.
-- **`--read-only`** removes the three write tools from the server (the pattern Linear uses), and
-  the README lists the matching read-only token permissions.
+- **Read-only by default.** The three write tools are in the server only when the operator
+  starts it with `--writable` (or `VIKUNJA_WRITABLE=true`); forgetting the switch leaves an
+  assistant that can only read. The README lists the matching read-only token permissions.
 - **Labels and assignees by name.** An unknown label is an error unless the call asks to create
   it, so a typo does not add a new label; every name is checked before anything is written, so a
   bad name leaves no half-made task.
@@ -67,7 +68,7 @@ language inside the tool. emperor-vikunja avoids this on purpose: one tool, one 
   notifications) on API v2, with deletes off by default. If the assistant should manage the
   board's structure, not only its tasks, it does more, at the cost of 52 tools in every request.
 - **Todoist's and Linear's own servers**: vendor-maintained, with the vendor's guarantees;
-  Linear's read-only endpoint is the model emperor-vikunja's `--read-only` follows.
+  Linear's separate read-only endpoint is close to emperor-vikunja's read-only default.
 
 ## When to pick something else
 
@@ -75,5 +76,5 @@ language inside the tool. emperor-vikunja avoids this on purpose: one tool, one 
 - You are not on Vikunja: the vendor's own server for your tracker.
 
 Pick emperor-vikunja when the assistant should work with tasks (find, read, create, update,
-comment) on a short tool list a small model can handle, with a read-only mode and no way to
-delete, or when one HTTP server serves several people with their own tokens.
+comment) on a short tool list a small model can handle, read-only unless switched on and with
+no way to delete, or when one HTTP server serves several people with their own tokens.

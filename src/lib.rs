@@ -1,9 +1,10 @@
 //! MCP server for [Vikunja](https://vikunja.io), built on
 //! [emperor-mcp](https://github.com/yarenty/emperor-mcp).
 //!
-//! Six tools (`list_tasks`, `get_task`, `create_task`, `update_task`, `comment`,
-//! `list_projects`) over a thin REST client. The token is forwarded per request over HTTP or
-//! read from `VIKUNJA_TOKEN` in stdio mode, and never stored.
+//! Six tools over a thin REST client: `list_tasks`, `get_task` and `list_projects` always,
+//! `create_task`, `update_task` and `comment` only when writing is switched on
+//! ([`VikunjaServer::writable`]; the server is read-only by default). The token is forwarded
+//! per request over HTTP or read from `VIKUNJA_TOKEN` in stdio mode, and never stored.
 //!
 //! - [`client`]: the Vikunja REST client (only the endpoints the tools use)
 //! - [`server`]: the rmcp `#[tool_router]` server

@@ -12,7 +12,7 @@ fn bearer(fake: &Fake) -> String {
 }
 
 #[tokio::test]
-async fn tools_list_has_exactly_six() {
+async fn tools_list_has_exactly_six_when_writable() {
     let fake = Fake::seeded().await;
     let base = start(&fake.base).await;
     let list = rpc(
@@ -66,6 +66,8 @@ async fn tools_list_conforms_and_annotations_are_exact() {
     )
     .await;
     emperor_mcp::testkit::assert_tools_json(&list);
+    emperor_mcp::testkit::assert_compact_schemas_json(&list);
+    assert!(emperor_mcp::testkit::warnings_json(&list).is_empty());
     let tools = list["result"]["tools"].as_array().unwrap();
     for (name, read_only, destructive, idempotent) in ANNOTATIONS {
         let t = tools.iter().find(|t| t["name"] == name).unwrap();
@@ -78,9 +80,9 @@ async fn tools_list_conforms_and_annotations_are_exact() {
 }
 
 #[tokio::test]
-async fn read_only_mode_lists_and_serves_only_the_read_tools() {
+async fn default_lists_and_serves_only_the_read_tools() {
     let fake = Fake::seeded().await;
-    let base = start_with(Some(&fake.base), true).await;
+    let base = start_with(Some(&fake.base), false).await;
     let list = rpc(
         &base,
         json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
@@ -88,6 +90,8 @@ async fn read_only_mode_lists_and_serves_only_the_read_tools() {
     )
     .await;
     emperor_mcp::testkit::assert_tools_json(&list);
+    emperor_mcp::testkit::assert_read_only_default_json(&list);
+    emperor_mcp::testkit::assert_compact_schemas_json(&list);
     let mut names: Vec<&str> = list["result"]["tools"]
         .as_array()
         .unwrap()
@@ -112,7 +116,7 @@ async fn read_only_mode_lists_and_serves_only_the_read_tools() {
     ] {
         let (_, _, v) = rpc_raw(&base, tool_call(tool, args), &[("Authorization", &auth)]).await;
         let refused = v.get("error").is_some() || v["result"]["isError"] == true;
-        assert!(refused, "{tool} must not run in read-only mode: {v}");
+        assert!(refused, "{tool} must not run without --writable: {v}");
     }
     assert!(
         fake.requests().is_empty(),

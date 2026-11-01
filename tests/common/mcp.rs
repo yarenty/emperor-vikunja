@@ -15,18 +15,19 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// Start the MCP server in front of the Vikunja at `vikunja_url`; returns its base URL.
+/// Start the MCP server, writing switched on, in front of the Vikunja at `vikunja_url`; returns
+/// its base URL.
 pub async fn start(vikunja_url: &str) -> String {
-    start_with(Some(vikunja_url), false).await
+    start_with(Some(vikunja_url), true).await
 }
 
-/// Start the MCP server with an optional default Vikunja and optionally read-only.
-pub async fn start_with(vikunja_url: Option<&str>, read_only: bool) -> String {
+/// Start the MCP server with an optional default Vikunja, writable or (the default) read-only.
+pub async fn start_with(vikunja_url: Option<&str>, writable: bool) -> String {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], free_port()));
     let upstreams = Upstreams::new(vikunja_url).unwrap();
     tokio::spawn(serve(
         ServeOptions::new(addr).with_forward(forward_config()),
-        move || VikunjaServer::http(upstreams.clone()).read_only(read_only),
+        move || VikunjaServer::http(upstreams.clone()).writable(writable),
     ));
     let base = format!("http://{addr}");
     for _ in 0..50 {
