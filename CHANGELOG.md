@@ -4,6 +4,12 @@ All notable changes to emperor-vikunja. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-01
+
+### Added
+- **Container image** - a `Dockerfile` that builds a small non-root image serving stdio; the Vikunja address comes from `VIKUNJA_URL`, the token from `VIKUNJA_TOKEN`.
+- **MCP Registry metadata** - `server.json` describes the crate, its stdio arguments and its environment variables for the official MCP Registry; the README carries the registry name.
+
 ## [0.1.0] - 2026-11-01
 
 > First release: Vikunja tasks for any MCP client.

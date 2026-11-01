@@ -87,6 +87,17 @@ export VIKUNJA_TOKEN=...            # from Settings > API Tokens
 emperor-vikunja serve --stdio --base-url https://vikunja.example.com
 ```
 
+### Docker (stdio)
+
+```bash
+docker build -t emperor-vikunja https://github.com/yarenty/emperor-vikunja.git
+docker run -i --rm -e VIKUNJA_URL=https://vikunja.example.com -e VIKUNJA_TOKEN emperor-vikunja
+# read-only: add --read-only after the image name
+```
+
+The image runs `emperor-vikunja serve --stdio` as a non-root user; the Vikunja address comes
+from `VIKUNJA_URL`.
+
 ### Shared (HTTP)
 
 ```bash
@@ -181,7 +192,7 @@ something is broken, so scripts and container health checks can use it:
 
 ```text
 $ VIKUNJA_TOKEN=... emperor-vikunja doctor --base-url https://vikunja.example.com
-emperor-vikunja 0.1.0 doctor
+emperor-vikunja 0.1.1 doctor
   [ok  ] base url        https://vikunja.example.com/
   [ok  ] vikunja api     Vikunja v2.7.1
   [ok  ] VIKUNJA_TOKEN   set (43 chars)
@@ -213,6 +224,12 @@ applied again locally so results stay right even where the server ignores part o
 cargo test                                               # unit, fake-Vikunja, MCP HTTP and stdio tests
 cargo test --test live_vikunja -- --ignored --nocapture  # every tool against a real Vikunja in Docker
 ```
+
+## Links
+
+- Crate: [crates.io/crates/emperor-vikunja](https://crates.io/crates/emperor-vikunja), API docs on [docs.rs](https://docs.rs/emperor-vikunja)
+- Container: build from the [`Dockerfile`](Dockerfile); it serves stdio and reads `VIKUNJA_URL` and `VIKUNJA_TOKEN`
+- Listed in the official MCP Registry as mcp-name: io.github.yarenty/emperor-vikunja
 
 ## License
 

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.yarenty/emperor-vikunja",
+  "title": "Vikunja tasks",
+  "description": "Vikunja tasks for MCP clients: list, read, create and update tasks, comment, list projects.",
+  "version": "0.1.1",
+  "repository": {
+    "url": "https://github.com/yarenty/emperor-vikunja",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/yarenty/emperor-vikunja",
+  "packages": [
+    {
+      "registryType": "cargo",
+      "identifier": "emperor-vikunja",
+      "version": "0.1.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve"
+        },
+        {
+          "type": "named",
+          "name": "--stdio",
+          "isRequired": true,
+          "description": "Speak MCP over stdin and stdout."
+        },
+        {
+          "type": "named",
+          "name": "--read-only",
+          "isRequired": false,
+          "description": "Serve only list_tasks, get_task and list_projects; the write tools are removed."
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "VIKUNJA_URL",
+          "description": "Address of your Vikunja, e.g. https://vikunja.example.com",
+          "isRequired": true,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "VIKUNJA_TOKEN",
+          "description": "Vikunja API token (Settings > API Tokens)",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
