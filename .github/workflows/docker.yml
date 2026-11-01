@@ -1,0 +1,114 @@
+name: Docker
+
+# Build the image natively on amd64 and arm64 and talk MCP to it over stdio, against a
+# throwaway Vikunja on the same Docker network.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - "src/**"
+      - .github/workflows/docker.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - "src/**"
+      - .github/workflows/docker.yml
+  workflow_dispatch:
+
+jobs:
+  image:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t emperor-vikunja:ci .
+
+      - name: Start Vikunja
+        run: |
+          docker network create mcp
+          docker run -d --name vikunja --network mcp -p 127.0.0.1:3456:3456 \
+            -e VIKUNJA_SERVICE_SECRET="$(openssl rand -hex 32)" \
+            -e VIKUNJA_SERVICE_PUBLICURL=http://vikunja:3456/ \
+            -e VIKUNJA_DATABASE_PATH=/tmp/vikunja.db \
+            -e VIKUNJA_FILES_BASEPATH=/tmp/files \
+            --tmpfs /tmp:uid=1000 \
+            vikunja/vikunja:latest
+          for _ in $(seq 120); do
+            curl -fsS http://127.0.0.1:3456/api/v1/info >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          docker logs vikunja
+          exit 1
+
+      - name: User, token and a project
+        run: |
+          api=http://127.0.0.1:3456/api/v1
+          password="$(openssl rand -hex 24)"
+          curl -fsS -X POST "$api/register" -H 'Content-Type: application/json' \
+            -d "{\"username\":\"mcpuser\",\"email\":\"mcp@example.com\",\"password\":\"$password\"}" >/dev/null
+          jwt="$(curl -fsS -X POST "$api/login" -H 'Content-Type: application/json' \
+            -d "{\"username\":\"mcpuser\",\"password\":\"$password\"}" | jq -r .token)"
+          token="$(curl -fsS -X PUT "$api/tokens" -H "Authorization: Bearer $jwt" \
+            -H 'Content-Type: application/json' \
+            -d '{"title":"mcp","expires_at":"2099-01-01T00:00:00Z","permissions":{
+                  "projects":["read_all","read_one"],
+                  "tasks":["read_all","read_one","create","update"],
+                  "tasks_comments":["read_all","create"],
+                  "tasks_labels":["read_all","create","delete"],
+                  "tasks_assignees":["read_all","create","delete"],
+                  "labels":["read_all","create"],
+                  "other":["user","users"]}}' | jq -r .token)"
+          curl -fsS -X PUT "$api/projects" -H "Authorization: Bearer $jwt" \
+            -H 'Content-Type: application/json' -d '{"title":"Work"}' >/dev/null
+          echo "::add-mask::$token"
+          echo "VIKUNJA_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: MCP over stdio
+        run: |
+          smoke() {
+            local want="$1"; shift
+            {
+              printf '%s\n' \
+                '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+                '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+                '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+                '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_projects","arguments":{}}}'
+              sleep 10
+            } | timeout 60 docker run -i --rm --network mcp \
+                  -e VIKUNJA_URL=http://vikunja:3456 -e VIKUNJA_TOKEN "$@" emperor-vikunja:ci \
+                  > out.jsonl 2> err.log || true
+            echo "--- stderr"; cat err.log
+            # stdout carries JSON-RPC and nothing else
+            test -s out.jsonl
+            while IFS= read -r line; do
+              echo "$line" | jq -e '.jsonrpc == "2.0"' >/dev/null \
+                || { echo "not JSON-RPC on stdout: $line"; exit 1; }
+            done < out.jsonl
+            jq -se 'map(select(.id == 1))[0].result.serverInfo' out.jsonl >/dev/null
+            tools="$(jq -s 'map(select(.id == 2))[0].result.tools | length' out.jsonl)"
+            echo "tools: $tools"
+            test "$tools" = "$want"
+            jq -se 'map(select(.id == 3))[0].result
+                    | (.isError // false) == false and (.content | length) > 0' out.jsonl
+          }
+          smoke 6
+          smoke 3 -e VIKUNJA_READ_ONLY=true
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker rm -f vikunja || true
+          docker network rm mcp || true

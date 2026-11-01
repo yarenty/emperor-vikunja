@@ -92,7 +92,7 @@ emperor-vikunja serve --stdio --base-url https://vikunja.example.com
 ```bash
 docker build -t emperor-vikunja https://github.com/yarenty/emperor-vikunja.git
 docker run -i --rm -e VIKUNJA_URL=https://vikunja.example.com -e VIKUNJA_TOKEN emperor-vikunja
-# read-only: add --read-only after the image name
+# read-only: add -e VIKUNJA_READ_ONLY=true (or --read-only after the image name)
 ```
 
 The image runs `emperor-vikunja serve --stdio` as a non-root user; the Vikunja address comes
@@ -119,7 +119,7 @@ JSON-RPC error.
 | Flag | Env | Meaning |
 |---|---|---|
 | `--base-url <URL>` | `VIKUNJA_URL` | Vikunja address; `https://host` and `https://host/api/v1` both work. Required with `--stdio`; optional over HTTP when requests send `X-Upstream-Url`. |
-| `--read-only` | | Serve only `list_tasks`, `get_task` and `list_projects`. The write tools are removed from the server, not just refused. |
+| `--read-only` | `VIKUNJA_READ_ONLY` | Serve only `list_tasks`, `get_task` and `list_projects`. The write tools are removed from the server, not just refused. From the environment `true`, `1` or `yes` turns it on; unset, empty, `false`, `0` or `no` leaves it off. |
 | `--stdio` | | Speak MCP over stdin/stdout; the token comes from `VIKUNJA_TOKEN`. |
 | `--bind <ADDR>` | | HTTP listen address (default `127.0.0.1:8034`). |
 | `--allowed-host <HOST>` | | Accept only this `Host` header (repeatable); off by default, for a validating proxy in front. |
@@ -192,7 +192,7 @@ something is broken, so scripts and container health checks can use it:
 
 ```text
 $ VIKUNJA_TOKEN=... emperor-vikunja doctor --base-url https://vikunja.example.com
-emperor-vikunja 0.1.1 doctor
+emperor-vikunja 0.1.2 doctor
   [ok  ] base url        https://vikunja.example.com/
   [ok  ] vikunja api     Vikunja v2.7.1
   [ok  ] VIKUNJA_TOKEN   set (43 chars)
@@ -228,7 +228,7 @@ cargo test --test live_vikunja -- --ignored --nocapture  # every tool against a 
 ## Links
 
 - Crate: [crates.io/crates/emperor-vikunja](https://crates.io/crates/emperor-vikunja), API docs on [docs.rs](https://docs.rs/emperor-vikunja)
-- Container: build from the [`Dockerfile`](Dockerfile); it serves stdio and reads `VIKUNJA_URL` and `VIKUNJA_TOKEN`
+- Container: build from the [`Dockerfile`](Dockerfile); it serves stdio and reads `VIKUNJA_URL`, `VIKUNJA_TOKEN` and `VIKUNJA_READ_ONLY`
 - Listed in the official MCP Registry as mcp-name: io.github.yarenty/emperor-vikunja
 - How it compares with other task-manager MCP servers: [docs/COMPARISON.md](docs/COMPARISON.md)
 

@@ -3,7 +3,7 @@
   "name": "io.github.yarenty/emperor-vikunja",
   "title": "Vikunja tasks",
   "description": "Vikunja tasks for MCP clients: list, read, create and update tasks, comment, list projects.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "repository": {
     "url": "https://github.com/yarenty/emperor-vikunja",
     "source": "github"
@@ -13,24 +13,26 @@
     {
       "registryType": "cargo",
       "identifier": "emperor-vikunja",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "transport": {
         "type": "stdio"
       },
       "packageArguments": [
         {
           "type": "positional",
-          "value": "serve"
+          "value": "serve",
+          "isRequired": true,
+          "description": "Run the MCP server."
         },
         {
-          "type": "named",
-          "name": "--stdio",
+          "type": "positional",
+          "value": "--stdio",
           "isRequired": true,
           "description": "Speak MCP over stdin and stdout."
         },
         {
-          "type": "named",
-          "name": "--read-only",
+          "type": "positional",
+          "value": "--read-only",
           "isRequired": false,
           "description": "Serve only list_tasks, get_task and list_projects; the write tools are removed."
         }
@@ -49,6 +51,13 @@
           "isRequired": true,
           "isSecret": true,
           "format": "string"
+        },
+        {
+          "name": "VIKUNJA_READ_ONLY",
+          "description": "Set to true to serve only the read tools (same as --read-only); unset, empty or false leaves them all on.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "boolean"
         }
       ]
     }

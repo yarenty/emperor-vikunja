@@ -30,6 +30,7 @@ async fn exchange_with(
         .args(extra_args)
         .env_remove("VIKUNJA_TOKEN")
         .env_remove("VIKUNJA_URL")
+        .env_remove("VIKUNJA_READ_ONLY")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -127,13 +128,21 @@ async fn stdio_read_only_lists_three_tools() {
 }
 
 fn doctor(args: &[&str], token: Option<&str>) -> (bool, String) {
+    doctor_env(args, token, None)
+}
+
+fn doctor_env(args: &[&str], token: Option<&str>, read_only_env: Option<&str>) -> (bool, String) {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_emperor-vikunja"));
     cmd.arg("doctor")
         .args(args)
         .env_remove("VIKUNJA_TOKEN")
-        .env_remove("VIKUNJA_URL");
+        .env_remove("VIKUNJA_URL")
+        .env_remove("VIKUNJA_READ_ONLY");
     if let Some(t) = token {
         cmd.env("VIKUNJA_TOKEN", t);
+    }
+    if let Some(v) = read_only_env {
+        cmd.env("VIKUNJA_READ_ONLY", v);
     }
     let out = cmd.output().unwrap();
     (
@@ -171,6 +180,29 @@ async fn doctor_reports_the_mode() {
     assert!(ok, "{report}");
     assert!(report.contains("read-write: "), "{report}");
     assert!(report.contains("6 of at most 8"), "{report}");
+}
+
+#[tokio::test]
+async fn doctor_reads_read_only_from_the_environment() {
+    let fake = Fake::seeded().await;
+    for (value, mode) in [
+        ("true", "read-only: "),
+        ("", "read-write: "),
+        ("false", "read-write: "),
+    ] {
+        let base = fake.base.clone();
+        let token = fake.token.clone();
+        let (ok, report) = tokio::task::spawn_blocking(move || {
+            doctor_env(&["--base-url", &base, "--stdio"], Some(&token), Some(value))
+        })
+        .await
+        .unwrap();
+        assert!(ok, "{report}");
+        assert!(
+            report.contains(mode),
+            "VIKUNJA_READ_ONLY={value:?}: {report}"
+        );
+    }
 }
 
 #[test]
