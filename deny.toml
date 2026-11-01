@@ -33,5 +33,3 @@ wildcards = "allow"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# emperor-mcp 0.2 from git until it is on crates.io; drop this line with the git dependency.
-allow-git = ["https://github.com/yarenty/emperor-mcp"]

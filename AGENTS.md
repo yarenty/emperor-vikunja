@@ -45,7 +45,7 @@ After any behaviour change update [`README.md`](./README.md) (tools table, token
 
 ## Release
 
-Tag `vX.Y.Z` on `main`: `.github/workflows/release.yml` builds Linux x86_64, macOS arm64 and x86_64 and Windows x86_64 binaries and attaches them to the GitHub release. Publishing to crates.io waits for `emperor-mcp` 0.2 on crates.io (a crate with a git dependency cannot be published); then switch the dependency to `version = "0.2"` and drop `allow-git` in `deny.toml`.
+Tag `vX.Y.Z` on `main`: `.github/workflows/release.yml` builds Linux x86_64, macOS arm64 and x86_64 and Windows x86_64 binaries and attaches them to the GitHub release. Then `cargo publish`.
 
 ## Related docs
 
