@@ -1,0 +1,50 @@
+name: emperor-vikunja
+type: server
+about:
+  title: Vikunja tasks
+  description: List, read, create and update tasks, comment on them and list projects in a Vikunja instance.
+  icon: /mcpicons/vikunja.svg
+meta:
+  category: productivity
+  tags: [tasks, todo, vikunja, projects]
+endpoint: http://127.0.0.1:8034/mcp
+topology: forward-headers
+headers:
+  Authorization:
+    template: "Bearer {token}"
+    secret: true
+    ui:
+      label: Vikunja API token
+      hint: Vikunja > Settings > API Tokens. Forwarded with every request, never stored by the server.
+tools:
+  - name: list_tasks
+    description: List tasks (open by default) sorted by priority then due date; filter by project, label, done, due_before, search.
+  - name: get_task
+    description: Read one task with every field, its description as text and its comments.
+  - name: create_task
+    description: Create a task with a Markdown description, labels (created when new), priority 0-5 and due date.
+  - name: update_task
+    description: Change title, description, done, priority, due date or labels of a task, or move it to another project.
+  - name: comment
+    description: Add a Markdown comment to a task.
+  - name: list_projects
+    description: List projects with parent and number of open tasks.
+config:
+  parameters:
+    type: object
+    required: [base_url]
+    properties:
+      base_url:
+        type: string
+        ui:
+          label: Vikunja URL
+          hint: Address of the Vikunja instance, e.g. https://vikunja.example.com (flag --base-url or env VIKUNJA_URL).
+      bind:
+        type: string
+        default: 127.0.0.1:8034
+        ui:
+          label: Listen address
+          hint: Where the MCP server listens in HTTP mode (flag --bind).
+test_tool:
+  name: list_projects
+  args: {}

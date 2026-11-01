@@ -1,0 +1,181 @@
+# emperor-vikunja
+
+[![CI](https://github.com/yarenty/emperor-vikunja/actions/workflows/ci.yml/badge.svg)](https://github.com/yarenty/emperor-vikunja/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
+**An MCP server for [Vikunja](https://vikunja.io), the open-source task manager.** Let Claude,
+kowalski or any MCP client list, read, create and update your tasks, comment on them and see
+your projects.
+
+Built on [emperor-mcp](https://github.com/yarenty/emperor-mcp) (Emperor Profile P1):
+
+- **Stateless Streamable HTTP** at `/mcp`, plus stdio for desktop clients.
+- **Your token is forwarded, never stored.** Over HTTP each request brings its own
+  `Authorization: Bearer <token>`; the server passes it to Vikunja and forgets it. There are no
+  default or test tokens.
+- **Framed output.** Task text written by people (descriptions, comments) reaches the model
+  marked as data, never as instructions.
+- **Six tools**, a `doctor` subcommand, Markdown in and plain text out.
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `list_tasks` | Tasks sorted by priority, then due date. Filters: `project` (title or id), `label`, `done` (default `false`), `due_before`, `search`; `limit` up to 100 (default 50). Returns id, title, project, labels, priority, due, done. |
+| `get_task` | One task by `id`: every field, the description as plain text, and the comments with author and date. |
+| `create_task` | `project`, `title`, optional `description` (Markdown), `labels` (created when new), `priority` 0-5, `due`. |
+| `update_task` | `id` plus any of `title`, `description`, `done`, `priority`, `due` (`"none"` clears it), `add_labels`, `remove_labels`, `project` (move). |
+| `comment` | Add a Markdown comment to task `id`. |
+| `list_projects` | Projects with id, title, parent and number of open tasks. |
+
+Priority: 0 unset, 1 low, 2 medium, 3 high, 4 urgent, 5 do now. Dates: `YYYY-MM-DD` (read as
+00:00 UTC) or ISO-8601; dates come back as RFC 3339, or `null` when unset.
+
+Descriptions and comments are stored by Vikunja as HTML. What the model writes in Markdown is
+rendered to HTML on the way in (raw HTML in the Markdown is escaped, not passed through); HTML
+read back is rendered to plain text.
+
+## Install
+
+From a release (Linux x86_64, macOS arm64 and x86_64, Windows x86_64): download the archive for
+your platform from [Releases](https://github.com/yarenty/emperor-vikunja/releases) and put
+`emperor-vikunja` on your `PATH`.
+
+From source (Rust 1.88 or newer):
+
+```bash
+cargo install --git https://github.com/yarenty/emperor-vikunja
+```
+
+## Get a token
+
+In Vikunja open **Settings > API Tokens > Create a token**, pick an expiry date and tick these
+permissions (the minimum the six tools need):
+
+| Group | Permissions |
+|---|---|
+| projects | `read_all`, `read_one` |
+| tasks | `read_all`, `read_one`, `create`, `update` |
+| tasks_comments | `read_all`, `create` |
+| tasks_labels | `read_all`, `create`, `delete` |
+| labels | `read_all`, `create` |
+| other | `user` (lets `doctor` show whose token it is) |
+
+For a read-only assistant leave out every `create`, `update` and `delete`; the write tools then
+answer with Vikunja's refusal.
+
+## Run
+
+### Local (stdio)
+
+```bash
+export VIKUNJA_TOKEN=...            # from Settings > API Tokens
+emperor-vikunja serve --stdio --base-url https://vikunja.example.com
+```
+
+### Shared (HTTP)
+
+```bash
+emperor-vikunja serve --base-url https://vikunja.example.com --bind 127.0.0.1:8034
+# MCP endpoint: http://127.0.0.1:8034/mcp   liveness: http://127.0.0.1:8034/health
+```
+
+Every MCP request must carry `Authorization: Bearer <token>`; each user brings their own.
+`VIKUNJA_TOKEN` is ignored in this mode, so one person's token can never answer another
+person's request. Tool discovery (`tools/list`) works without a token.
+
+The base URL also comes from `VIKUNJA_URL`. `https://host` and `https://host/api/v1` both work.
+Logs go to stderr; `RUST_LOG=debug` for more. In production put the HTTP server behind a
+reverse proxy that terminates TLS (Emperor Profile E5).
+
+## Connect
+
+**Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "vikunja": {
+      "command": "emperor-vikunja",
+      "args": ["serve", "--stdio", "--base-url", "https://vikunja.example.com"],
+      "env": { "VIKUNJA_TOKEN": "<your token>" }
+    }
+  }
+}
+```
+
+**Claude Code**:
+
+```bash
+# stdio
+claude mcp add vikunja --env VIKUNJA_TOKEN=<your token> -- \
+  emperor-vikunja serve --stdio --base-url https://vikunja.example.com
+# or against a running HTTP server
+claude mcp add --transport http vikunja http://127.0.0.1:8034/mcp \
+  --header "Authorization: Bearer <your token>"
+```
+
+**[kowalski](https://github.com/yarenty/kowalski)** (`config.toml`):
+
+```toml
+[[mcp.servers]]
+name = "vikunja"
+transport = "stdio"
+command = ["emperor-vikunja", "serve", "--stdio", "--base-url", "https://vikunja.example.com"]
+# VIKUNJA_TOKEN is read from kowalski's environment.
+
+# or over HTTP
+[[mcp.servers]]
+name = "vikunja-http"
+transport = "http"
+url = "http://127.0.0.1:8034/mcp"
+headers = { Authorization = "Bearer <your token>" }
+```
+
+## Doctor
+
+`emperor-vikunja doctor` checks the setup before you start the server and exits `1` when
+something is broken, so scripts and container health checks can use it:
+
+```text
+$ VIKUNJA_TOKEN=... emperor-vikunja doctor --base-url https://vikunja.example.com
+emperor-vikunja 0.1.0 doctor
+  [ok  ] base url        https://vikunja.example.com/
+  [ok  ] vikunja api     Vikunja v2.7.1
+  [ok  ] VIKUNJA_TOKEN   set (43 chars)
+  [ok  ] vikunja login   token works for user alice
+  [ok  ] listen address  127.0.0.1:8034 is free
+  [ok  ] tool budget     6 of at most 8 tools
+all good (0 warning(s))
+```
+
+It checks that the URL parses, `GET /api/v1/info` answers, the token is set (only its length is
+shown) and `GET /api/v1/user` accepts it, the listen address is free (skipped with `--stdio`),
+and the tool count is within the emperor-mcp budget. Without `VIKUNJA_TOKEN` in HTTP mode the
+token line is a warning, because the token comes per request; with `--stdio` it is a failure.
+
+## Compatibility
+
+Tested against Vikunja v2.7 (the `vikunja/vikunja` image). Tasks are listed through `GET /tasks`
+with Vikunja's filter syntax (`done = false && project = 3 && labels in 5 && due_date < '...'`);
+older releases that serve `/tasks/all` instead are picked up automatically, and every filter is
+applied again locally so results stay right even where the server ignores part of it.
+
+## Build and test
+
+```bash
+cargo test                                               # unit, fake-Vikunja, MCP HTTP and stdio tests
+cargo test --test live_vikunja -- --ignored --nocapture  # every tool against a real Vikunja in Docker
+```
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+emperor-vikunja by you shall be dual licensed as above, without any additional terms or conditions.
