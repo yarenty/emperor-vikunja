@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/yarenty/emperor-vikunja/actions/workflows/ci.yml/badge.svg)](https://github.com/yarenty/emperor-vikunja/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Glama](https://glama.ai/mcp/servers/yarenty/emperor-vikunja/badges/score.svg)](https://glama.ai/mcp/servers/yarenty/emperor-vikunja)
 
 **An MCP server for [Vikunja](https://vikunja.io), the open-source task manager.** Let Claude,
 kowalski or any MCP client list, read, create and update your tasks, comment on them and see
